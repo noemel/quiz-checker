@@ -1,3 +1,5 @@
 allowBuilds:
+  core-js: false
   sharp: false
+  tesseract.js: false
   unrs-resolver: false
