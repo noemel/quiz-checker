@@ -132,7 +132,15 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
   function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
     const file = input.files?.[0];
-    if (file) setImage(file);
+    if (!file) return;
+
+    if (file.type.startsWith("image/")) {
+      setReadError("");
+      setImage(file);
+      setResults(null);
+    } else {
+      setReadError("Choose an image of the answer sheet.");
+    }
     input.value = "";
   }
 
@@ -246,7 +254,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
         <div className="answer-check-content">
           <div className="answer-capture-panel">
             <h3>Student response</h3>
-            <p>Capture a clear answer sheet or upload an image.</p>
+            <p>Capture a clear answer sheet or upload an image file.</p>
             <div className={`answer-camera-stage${cameraActive ? " is-live" : ""}${cameraExpanded ? " camera-expanded" : ""}`}>
               <video
                 ref={videoRef}
@@ -277,7 +285,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
             {!cameraActive && (
               <div className="answer-capture-actions">
                 <button className="builder-secondary-button" type="button" onClick={() => void startCamera()}>Start live camera</button>
-                <input ref={uploadRef} className="file-input" type="file" accept="image/*" onChange={handleUpload} aria-label="Upload student answer image" />
+                <input ref={uploadRef} className="file-input" type="file" accept="image/*" onChange={handleUpload} aria-label="Upload a student answer sheet image" />
                 <button className="builder-secondary-button" type="button" onClick={() => uploadRef.current?.click()}>Upload image</button>
               </div>
             )}

@@ -181,6 +181,9 @@ export default function Home() {
     setKeySheetError("");
     setIsReadingKey(true);
     try {
+      if (!uploadedSheet.type.startsWith("image/")) {
+        throw new Error("Choose an image of the completed key sheet.");
+      }
       const text = await recognizeImage(uploadedSheet, () => {});
       if (!text) throw new Error("No text was found. Try a clearer image of the key sheet.");
       setReferenceAnswer(text);
@@ -494,7 +497,7 @@ export default function Home() {
               </div>
             )}
           </div>
-          <p className="privacy-note">Live preview stays on this device. Clear, well-lit pages work best.</p>
+          <p className="privacy-note">Live preview stays on this device. Clear image files work best.</p>
           {cameraError && <p className="error-message" role="alert">{cameraError}</p>}
 
           <label className="field-label response-label" htmlFor="student-answer">RECOGNIZED / TYPED ANSWER</label>

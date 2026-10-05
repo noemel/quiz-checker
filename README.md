@@ -1,5 +1,17 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Database (saved exams)
+
+Saved exams go to **Neon Postgres** when `DATABASE_URL` is set, which is what you need on Vercel. Copy `.env.example` to `.env.local` and paste your Neon connection string:
+
+```bash
+DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"
+```
+
+The `exams` table is created automatically on the first request, so there is no migration step.
+
+Without `DATABASE_URL`, local development falls back to a SQLite file at `.data/exams.sqlite`. That fallback is gitignored and only works on your own machine — the deployed app on Vercel has no writable filesystem, so it needs the Postgres connection string.
+
 ## Getting Started
 
 First, run the development server:

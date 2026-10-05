@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    return Response.json({ exams: listExams() });
+    return Response.json({ exams: await listExams() });
   } catch {
     return Response.json({ error: "Saved exams could not be loaded." }, { status: 500 });
   }
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const exam = insertExam(body as ExamDraft);
+    const exam = await insertExam(body as ExamDraft);
     return Response.json({ exam }, { status: 201 });
   } catch {
     return Response.json({ error: "Exam could not be saved." }, { status: 500 });

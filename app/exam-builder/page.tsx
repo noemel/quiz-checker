@@ -143,6 +143,11 @@ export default function ExamBuilderPage() {
 
     setExamPackageMessage("");
     try {
+      const extension = file.name.toLowerCase().split(".").pop();
+      if (extension !== "json") {
+        throw new Error("Choose a Markwise .json package.");
+      }
+
       const parsed: unknown = JSON.parse(await file.text());
       const envelope = typeof parsed === "object" && parsed !== null
         ? parsed as Record<string, unknown>
@@ -153,8 +158,8 @@ export default function ExamBuilderPage() {
       if (envelope.format === "markwise-exam-package" && envelope.version !== 1) {
         throw new Error("This exam package version is not supported.");
       }
-
       const draft = normalizeExamDraft(envelope.format === "markwise-exam-package" ? envelope.exam : parsed);
+
       const validationIssues = validateExamDraft(draft);
       if (validationIssues.length > 0) {
         throw new Error(`The file is incomplete: ${validationIssues.map((issue) => issue.message).join(" ")}`);
@@ -759,7 +764,7 @@ export default function ExamBuilderPage() {
                   aria-label="Upload a Markwise exam package with answer key"
                 />
                 <button className="builder-secondary-button" type="button" onClick={() => examPackageInputRef.current?.click()}>
-                  Upload exam + key
+                  Import exam package
                 </button>
                 <button className="builder-secondary-button" type="button" onClick={downloadExamPackage} disabled={!formStarted}>
                   Export one-file package

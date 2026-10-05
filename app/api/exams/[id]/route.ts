@@ -12,7 +12,7 @@ interface RouteContext {
 export async function GET(_request: Request, context: RouteContext) {
   const { id } = await context.params;
   try {
-    const exam = getExam(id);
+    const exam = await getExam(id);
     return exam
       ? Response.json({ exam })
       : Response.json({ error: "Exam not found." }, { status: 404 });
@@ -36,7 +36,7 @@ export async function PUT(request: Request, context: RouteContext) {
   }
 
   try {
-    const exam = updateExam(id, body as ExamDraft);
+    const exam = await updateExam(id, body as ExamDraft);
     return exam
       ? Response.json({ exam })
       : Response.json({ error: "Exam not found." }, { status: 404 });
@@ -48,7 +48,7 @@ export async function PUT(request: Request, context: RouteContext) {
 export async function DELETE(_request: Request, context: RouteContext) {
   const { id } = await context.params;
   try {
-    return deleteExam(id)
+    return (await deleteExam(id))
       ? new Response(null, { status: 204 })
       : Response.json({ error: "Exam not found." }, { status: 404 });
   } catch {
