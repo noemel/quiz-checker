@@ -9,10 +9,20 @@ type ExamDatabaseGlobal = typeof globalThis & {
 const databaseGlobal = globalThis as ExamDatabaseGlobal;
 
 async function createStore(): Promise<ExamStore> {
+  const mysqlUrl = process.env.MYSQL_URL?.trim();
+  if (mysqlUrl) {
+    const { createMysqlExamStore } = await import("./exam-store-mysql");
+    return createMysqlExamStore(mysqlUrl);
+  }
+
   const connectionString = process.env.DATABASE_URL?.trim();
   if (connectionString) {
     const { createNeonExamStore } = await import("./exam-store-neon");
     return createNeonExamStore(connectionString);
+  }
+
+  if (process.env.VERCEL === "1") {
+    throw new Error("MYSQL_URL or DATABASE_URL must be configured on Vercel.");
   }
 
   const { createSqliteExamStore } = await import("./exam-store-sqlite");

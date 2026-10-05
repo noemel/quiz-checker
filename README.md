@@ -1,48 +1,22 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Quiz Checker
 
-## Database (saved exams)
+## Local MySQL with XAMPP
 
-Saved exams go to **Neon Postgres** when `DATABASE_URL` is set, which is what you need on Vercel. Copy `.env.example` to `.env.local` and paste your Neon connection string:
+1. Start **MySQL** from the XAMPP Control Panel.
+2. Open phpMyAdmin at `http://localhost/phpmyadmin` and import `database/schema.mysql.sql`.
+3. Copy `.env.example` to `.env.local`. For a default XAMPP installation, use:
 
-```bash
-DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"
-```
+   ```env
+   MYSQL_URL="mysql://root@127.0.0.1:3306/quiz_checker"
+   ```
 
-The `exams` table is created automatically on the first request, so there is no migration step.
+   If you set a MySQL root password, include it in the URL and URL-encode special characters.
+4. Install dependencies with `pnpm install`, then run `pnpm dev`.
 
-Without `DATABASE_URL`, local development falls back to a SQLite file at `.data/exams.sqlite`. That fallback is gitignored and only works on your own machine — the deployed app on Vercel has no writable filesystem, so it needs the Postgres connection string.
+The app also creates the `exams` table automatically when it first connects. The SQL file creates the database and the same table in advance.
 
-## Getting Started
+## Vercel
 
-First, run the development server:
+XAMPP runs on your own computer, so a Vercel deployment cannot connect to that local MySQL server. Set `MYSQL_URL` in Vercel to a hosted MySQL database that accepts connections from Vercel, and create the `quiz_checker` database there. Do not expose your local XAMPP server to the public internet. An existing Neon Postgres connection can still be supplied as `DATABASE_URL` if preferred.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Database URLs are server-only environment variables; do not prefix them with `NEXT_PUBLIC_` or commit real credentials.
