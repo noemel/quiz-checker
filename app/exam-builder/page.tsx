@@ -1,7 +1,7 @@
 'use client';
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { jsPDF as JsPDFDocument } from "jspdf";
 import AnswerChecker from "./answer-checker";
 import { validateExamDraft } from "@/app/lib/exam-validation";
@@ -101,6 +101,8 @@ export default function ExamBuilderPage() {
   const [checkingExam, setCheckingExam] = useState<SavedExam | null>(null);
   const [isLoadingExams, setIsLoadingExams] = useState(true);
   const [savedListError, setSavedListError] = useState("");
+  const [examPackageMessage, setExamPackageMessage] = useState("");
+  const examPackageInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -132,6 +134,70 @@ export default function ExamBuilderPage() {
       matchingChoices,
       questions,
     };
+  }
+
+  async function handleExamPackageUpload(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    setExamPackageMessage("");
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      const envelope = typeof parsed === "object" && parsed !== null
+        ? parsed as Record<string, unknown>
+        : {};
+      if (envelope.format && envelope.format !== "markwise-exam-package") {
+        throw new Error("This file is not a Markwise exam package.");
+      }
+      if (envelope.format === "markwise-exam-package" && envelope.version !== 1) {
+        throw new Error("This exam package version is not supported.");
+      }
+
+      const draft = normalizeExamDraft(envelope.format === "markwise-exam-package" ? envelope.exam : parsed);
+      const validationIssues = validateExamDraft(draft);
+      if (validationIssues.length > 0) {
+        throw new Error(`The file is incomplete: ${validationIssues.map((issue) => issue.message).join(" ")}`);
+      }
+
+      setTitle(draft.title);
+      setItemCount(String(draft.itemCount));
+      setTypeCounts({ ...draft.typeCounts });
+      setPreparedTypeCounts({ ...draft.typeCounts });
+      setPreparedCount(draft.itemCount);
+      setQuestions(draft.questions);
+      setInstructions(draft.instructions);
+      setMatchingChoices(draft.matchingChoices);
+      setActiveQuestionId(draft.questions.find((question) => !question.prompt.trim())?.id ?? draft.questions[0]?.id ?? null);
+      setEditingExamId(null);
+      setFormStarted(true);
+      setSetupStep(3);
+      setIssues([]);
+      setFormMessage("");
+      setPreviewDraft(null);
+      setPreviewSavedExamId(null);
+      setExamPackageMessage(`Imported “${draft.title}” with its answer key. Save it to add it to Saved exams.`);
+    } catch (error) {
+      setExamPackageMessage(error instanceof Error ? error.message : "This exam file could not be imported.");
+    } finally {
+      input.value = "";
+    }
+  }
+
+  function downloadExamPackage() {
+    if (!formStarted || !validateCurrentDraft()) return;
+    const packageContents = {
+      format: "markwise-exam-package",
+      version: 1,
+      exam: currentDraft(),
+    };
+    const blob = new Blob([JSON.stringify(packageContents, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "exam"}-with-answer-key.json`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function beginQuestionSetup() {
@@ -682,8 +748,25 @@ export default function ExamBuilderPage() {
                 <h2>{formStarted ? "Exam setup" : setupStep === 1 ? "Exam details" : "Choose exam type"}</h2>
                 <p>{formStarted ? "Your exam is ready for editing." : setupStep === 1 ? "Start with a title and total item count." : "Choose the format for all questions in this exam."}</p>
               </div>
-              {editingExamId && <span className="editing-indicator">EDITING SAVED EXAM</span>}
+              <div className="builder-package-actions">
+                {editingExamId && <span className="editing-indicator">EDITING SAVED EXAM</span>}
+                <input
+                  ref={examPackageInputRef}
+                  className="file-input"
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleExamPackageUpload}
+                  aria-label="Upload a Markwise exam package with answer key"
+                />
+                <button className="builder-secondary-button" type="button" onClick={() => examPackageInputRef.current?.click()}>
+                  Upload exam + key
+                </button>
+                <button className="builder-secondary-button" type="button" onClick={downloadExamPackage} disabled={!formStarted}>
+                  Export one-file package
+                </button>
+              </div>
             </div>
+            {examPackageMessage && <p className={`builder-message${examPackageMessage.startsWith("Imported") ? " success-message" : ""}`} role="status">{examPackageMessage}</p>}
 
             <div className="builder-steps" aria-label="Exam setup steps">
               {["Details", "Exam type", "Questions"].map((label, index) => {

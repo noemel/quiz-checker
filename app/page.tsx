@@ -70,6 +70,7 @@ export default function Home() {
   const [photo, setPhoto] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
+  const [cameraExpanded, setCameraExpanded] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [keySheetName, setKeySheetName] = useState("");
   const [isReadingKey, setIsReadingKey] = useState(false);
@@ -133,6 +134,7 @@ export default function Home() {
     cameraStreamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setCameraActive(false);
+    setCameraExpanded(false);
   }
 
   async function capturePhoto() {
@@ -467,7 +469,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className={`photo-well${previewUrl ? " has-photo" : ""}${cameraActive ? " camera-live" : ""}`}>
+          <div className={`photo-well${previewUrl ? " has-photo" : ""}${cameraActive ? " camera-live" : ""}${cameraExpanded ? " camera-expanded" : ""}`}>
             <video ref={videoRef} className={`camera-feed${cameraActive ? " active" : ""}`} autoPlay muted playsInline aria-label="Live camera preview" />
             {previewUrl ? (
               <>
@@ -478,6 +480,9 @@ export default function Home() {
             ) : cameraActive ? (
               <div className="camera-controls">
                 <button className="camera-button" type="button" onClick={capturePhoto}><CameraIcon /> Capture page</button>
+                <button className="camera-expand-button" type="button" onClick={() => setCameraExpanded((expanded) => !expanded)} aria-pressed={cameraExpanded}>
+                  {cameraExpanded ? "Collapse" : "Expand"}
+                </button>
                 <button className="camera-cancel" type="button" onClick={stopCamera}>Cancel</button>
               </div>
             ) : (

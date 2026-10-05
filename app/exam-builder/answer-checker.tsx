@@ -102,6 +102,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [responseText, setResponseText] = useState("");
   const [cameraActive, setCameraActive] = useState(false);
+  const [cameraExpanded, setCameraExpanded] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [readError, setReadError] = useState("");
   const [isReading, setIsReading] = useState(false);
@@ -166,6 +167,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setCameraActive(false);
+    setCameraExpanded(false);
   }
 
   async function capturePhoto() {
@@ -245,7 +247,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
           <div className="answer-capture-panel">
             <h3>Student response</h3>
             <p>Capture a clear answer sheet or upload an image.</p>
-            <div className={`answer-camera-stage${cameraActive ? " is-live" : ""}`}>
+            <div className={`answer-camera-stage${cameraActive ? " is-live" : ""}${cameraExpanded ? " camera-expanded" : ""}`}>
               <video
                 ref={videoRef}
                 className={`answer-camera-feed${cameraActive ? " active" : ""}`}
@@ -257,6 +259,9 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
               {cameraActive ? (
                 <div className="answer-camera-controls">
                   <button className="camera-button" type="button" onClick={capturePhoto}>Capture</button>
+                  <button className="camera-expand-button" type="button" onClick={() => setCameraExpanded((expanded) => !expanded)} aria-pressed={cameraExpanded}>
+                    {cameraExpanded ? "Collapse" : "Expand"}
+                  </button>
                   <button className="camera-cancel" type="button" onClick={stopCamera}>Cancel</button>
                 </div>
               ) : previewUrl ? (

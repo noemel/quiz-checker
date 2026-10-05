@@ -515,6 +515,20 @@ button {
   background: rgba(20, 35, 28, 0.95);
 }
 
+.camera-expand-button {
+  background: rgba(20, 35, 28, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 3px;
+  color: white;
+  font-size: 10px;
+  min-height: 31px;
+  padding: 0 11px;
+}
+
+.camera-expand-button:hover {
+  background: rgba(20, 35, 28, 0.98);
+}
+
 .photo-well.has-photo {
   background: #17221d;
   border-style: solid;
@@ -534,6 +548,23 @@ button {
   height: 100%;
   object-fit: cover;
   width: 100%;
+}
+
+.photo-well.camera-expanded {
+  background: #111a15;
+  box-shadow: 0 0 0 100vmax rgba(12, 23, 17, 0.76);
+  height: min(850px, calc(100dvh - 32px));
+  left: 50%;
+  max-height: none;
+  position: fixed;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1100px, calc(100vw - 32px));
+  z-index: 100;
+}
+
+.photo-well.camera-expanded .camera-feed.active {
+  object-fit: contain;
 }
 
 .photo-preview {
@@ -1150,6 +1181,15 @@ button {
   font-weight: 700;
   letter-spacing: 0.9px;
   white-space: nowrap;
+}
+
+.builder-package-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: flex-end;
 }
 
 .builder-setup-grid {
@@ -1957,6 +1997,23 @@ button {
   border-style: solid;
 }
 
+.answer-camera-stage.camera-expanded {
+  aspect-ratio: auto;
+  background: #111a15;
+  bottom: 14px;
+  box-shadow: 0 0 0 100vmax rgba(12, 23, 17, 0.76);
+  left: 14px;
+  max-height: none;
+  position: fixed;
+  right: 14px;
+  top: 14px;
+  z-index: 100;
+}
+
+.answer-camera-stage.camera-expanded .answer-camera-feed.active {
+  object-fit: contain;
+}
+
 .answer-camera-stage > video,
 .answer-camera-stage > img {
   display: block;
@@ -2289,5 +2346,21 @@ button {
     grid-template-columns: minmax(70px, 0.85fr) minmax(70px, 1fr) minmax(80px, 1fr) 68px;
     padding-left: 7px;
     padding-right: 7px;
+  }
+}
+
+@media (max-width: 640px) {
+  .builder-main > .builder-panel-heading:first-child {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .builder-package-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .builder-package-actions .builder-secondary-button {
+    flex: 1 1 auto;
   }
 }
