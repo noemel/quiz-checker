@@ -197,13 +197,11 @@ function findRegistrationMarks(image: ImageData) {
     }
   }
 
-  const largest = candidates.sort((a, b) => b.area - a.area).slice(0, 12);
-  if (largest.length < 4) return null;
-  const marks = largest.slice(0, 4).map(({ x, y }) => ({ x, y }));
-  const topLeft = marks.reduce((best, point) => point.x + point.y < best.x + best.y ? point : best);
-  const topRight = marks.reduce((best, point) => point.x - point.y > best.x - best.y ? point : best);
-  const bottomRight = marks.reduce((best, point) => point.x + point.y > best.x + best.y ? point : best);
-  const bottomLeft = marks.reduce((best, point) => point.x - point.y < best.x - best.y ? point : best);
+  if (candidates.length < 4) return null;
+  const topLeft = candidates.reduce((best, point) => point.x + point.y < best.x + best.y ? point : best);
+  const topRight = candidates.reduce((best, point) => point.x - point.y > best.x - best.y ? point : best);
+  const bottomRight = candidates.reduce((best, point) => point.x + point.y > best.x + best.y ? point : best);
+  const bottomLeft = candidates.reduce((best, point) => point.x - point.y < best.x - best.y ? point : best);
   if (new Set([topLeft, topRight, bottomRight, bottomLeft]).size !== 4) return null;
   return [topLeft, topRight, bottomRight, bottomLeft] as const;
 }
