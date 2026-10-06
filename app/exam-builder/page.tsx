@@ -9,6 +9,7 @@ import type { jsPDF as JsPDFDocument } from "jspdf";
 import AnswerChecker from "./answer-checker";
 import { createMatchingChoiceRows } from "./answer-sheet-omr";
 import { answerSheetPageHeight, answerSheetPageWidth, createAnswerSheetLayout } from "./answer-sheet-omr";
+import { convertStructuredExam } from "@/app/lib/exam-import";
 import { validateExamDraft } from "@/app/lib/exam-validation";
 import { examTypes, normalizeExamDraft, type ExamDraft, type ExamQuestion, type ExamType, type ExamTypeCounts, type SavedExam, type ValidationIssue } from "@/app/lib/exam-types";
 
@@ -332,7 +333,9 @@ export default function ExamBuilderPage() {
         if (envelope.format === "markwise-exam-package" && envelope.version !== 1) {
           throw new Error("This exam package version is not supported.");
         }
-        const draft = normalizeExamDraft(envelope.format === "markwise-exam-package" ? envelope.exam : parsed);
+        const draft = envelope.format === "markwise-exam-package"
+          ? normalizeExamDraft(envelope.exam)
+          : convertStructuredExam(parsed) ?? normalizeExamDraft(parsed);
 
         const validationIssues = validateExamDraft(draft);
         if (validationIssues.length > 0) {
@@ -978,10 +981,10 @@ export default function ExamBuilderPage() {
                   type="file"
                   accept=".json,application/json,.doc,.docx,.txt,.pdf,image/*"
                   onChange={handleExamPackageUpload}
-                  aria-label="Upload a Markwise exam package or document"
+                  aria-label="Upload a Markwise exam package, structured exam JSON, or document"
                 />
                 <button className="builder-secondary-button" type="button" onClick={() => examPackageInputRef.current?.click()}>
-                  Import package / doc
+                  Import exam / package / doc
                 </button>
                 <button className="builder-secondary-button" type="button" onClick={downloadExamPackage} disabled={!formStarted}>
                   Export one-file package
