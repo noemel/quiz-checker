@@ -1323,11 +1323,32 @@ button {
   min-width: 0;
 }
 
-.builder-field > span {
+.builder-field-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.builder-field > span,
+.builder-field-header > span:first-child {
   color: #738279;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 1px;
+}
+
+.scanned-badge {
+  background: rgba(23, 98, 77, 0.1);
+  border: 1px solid rgba(23, 98, 77, 0.25);
+  border-radius: 999px;
+  color: var(--green);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  padding: 3px 7px;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .builder-input,

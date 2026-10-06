@@ -934,7 +934,7 @@ export default function ExamBuilderPage() {
                   aria-label="Upload a scanned exam document or image"
                 />
                 <button className="builder-secondary-button" type="button" onClick={() => documentInputRef.current?.click()} disabled={isImportingDocument}>
-                  {isImportingDocument ? `Scanning... ${documentImportProgress}%` : "Scan exam document"}
+                  {isImportingDocument ? `Scanning... ${documentImportProgress}%` : "Scan"}
                 </button>
                 <input
                   ref={examPackageInputRef}
@@ -952,7 +952,7 @@ export default function ExamBuilderPage() {
                 </button>
               </div>
             </div>
-            {documentImportMessage && <p className="builder-message success-message" role="status">{documentImportMessage}</p>}
+            {documentImportMessage && <p className="builder-message success-message" role="status">Scanned exam imported: {documentImportMessage}</p>}
             {examPackageMessage && <p className={`builder-message${examPackageMessage.startsWith("Imported") ? " success-message" : ""}`} role="status">{examPackageMessage}</p>}
 
             <div className="builder-steps" aria-label="Exam setup steps">
@@ -970,7 +970,10 @@ export default function ExamBuilderPage() {
             {!formStarted && setupStep === 1 && (
               <div className="builder-setup-grid builder-setup-grid-details">
                 <label className="builder-field builder-title-field" htmlFor="exam-title">
-                  <span>EXAM TITLE</span>
+                  <div className="builder-field-header">
+                    <span>EXAM TITLE</span>
+                    {documentImportMessage && <span className="scanned-badge">Scanned</span>}
+                  </div>
                   <input
                     id="exam-title"
                     className="builder-input"
@@ -1037,7 +1040,10 @@ export default function ExamBuilderPage() {
             {formStarted && (
               <div className="builder-setup-grid">
                 <label className="builder-field builder-title-field" htmlFor="exam-title">
-                  <span>EXAM TITLE</span>
+                  <div className="builder-field-header">
+                    <span>EXAM TITLE</span>
+                    {documentImportMessage && <span className="scanned-badge">Scanned</span>}
+                  </div>
                   <input id="exam-title" className="builder-input" value={title} disabled />
                 </label>
                 <label className="builder-field" htmlFor="item-count">
