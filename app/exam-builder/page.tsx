@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { jsPDF as JsPDFDocument } from "jspdf";
 import AnswerChecker from "./answer-checker";
 import { createMatchingChoiceRows } from "./answer-sheet-omr";
-import { answerSheetMarkers, answerSheetPageHeight, answerSheetPageWidth, createAnswerSheetLayout } from "./answer-sheet-omr";
+import { answerSheetPageHeight, answerSheetPageWidth, createAnswerSheetLayout } from "./answer-sheet-omr";
 import { validateExamDraft } from "@/app/lib/exam-validation";
 import { examTypes, normalizeExamDraft, type ExamDraft, type ExamQuestion, type ExamType, type ExamTypeCounts, type SavedExam, type ValidationIssue } from "@/app/lib/exam-types";
 
@@ -433,8 +433,6 @@ export default function ExamBuilderPage() {
 
     function startPage() {
       drawLongPaperHeader(pdf, exam.title, "Answer Sheet", `${exam.itemCount} items`);
-      pdf.setFillColor(0, 0, 0);
-      answerSheetMarkers.forEach(({ x, y }) => pdf.rect(x - 2, y - 2, 4, 4, "F"));
       pdf.setTextColor(23, 44, 37);
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(9);
@@ -443,7 +441,7 @@ export default function ExamBuilderPage() {
       pdf.text("Date:", 143, 62);
       pdf.line(155, 63, pageWidth - margin, 63);
       pdf.setFontSize(7);
-      pdf.text("Shade one circle below the letter for each item. For matching, choose the letter of the correct option.", margin, 73);
+      pdf.text("Write one answer on each line. Use the option letter for MC and matching; write True or False for T/F.", margin, 73);
       if (pdf.getNumberOfPages() === 1 && exam.questions.some((question) => question.type === "matching")) {
         pdf.setFont("helvetica", "bold");
         pdf.text("MATCHING CHOICES", margin, 82);
@@ -481,13 +479,14 @@ export default function ExamBuilderPage() {
         return;
       }
 
+      const answerPrompt = question.type === "multiple-choice"
+        ? "Option (A-D):"
+        : question.type === "true-false" ? "True / False:" : "Choice letter:";
       pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(7);
-      row.bubbles.forEach(({ label, x, y }) => {
-        pdf.setDrawColor(58, 76, 65);
-        pdf.circle(x, y, 3.2, "S");
-        pdf.text(label, x, y - 4, { align: "center" });
-      });
+      pdf.setFontSize(8);
+      pdf.text(answerPrompt, margin + 27, row.y + 4);
+      pdf.setDrawColor(95, 119, 104);
+      pdf.line(margin + 59, row.y + 6, pageWidth - margin, row.y + 6);
     });
 
     const pageCount = layout.pageCount;
@@ -517,46 +516,46 @@ export default function ExamBuilderPage() {
       y = 62;
     }
 
-    function writeAnswer(text: string) {
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(9);
-      const lines = pdf.splitTextToSize(text, pageWidth - margin * 2 - 8) as string[];
-      const height = Math.max(lines.length, 1) * 5;
-      if (y + height > bottom) {
+    function writeAnswer(question: ExamQuestion, questionNumber: number) {
+      if (y + 20 > bottom) {
         pdf.addPage();
         startPage();
       }
+
+      const answerPrompt = question.type === "multiple-choice" ? "MC A-D:"
+        : question.type === "true-false" ? "T/F:"
+          : question.type === "matching" ? "Match:"
+            : "ID:";
+
+      pdf.setTextColor(39, 85, 66);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(9);
+      pdf.text(`${String(questionNumber).padStart(2, "0")}. ${answerPrompt}`, margin + 1, y);
+
+      const answerText = question.type === "multiple-choice"
+        ? question.correctAnswer || "No answer set"
+        : question.type === "matching"
+          ? question.correctAnswer || "No answer set"
+          : question.correctAnswer || "No answer set";
+
+      const wrapped = pdf.splitTextToSize(answerText, pageWidth - margin * 2 - 12) as string[];
+      const answerHeight = wrapped.length * 5 + 4;
+      if (y + answerHeight > bottom) {
+        pdf.addPage();
+        startPage();
+      }
+
       pdf.setTextColor(23, 44, 37);
-      pdf.text(lines, margin + 3, y);
-      y += height + 3;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.text(wrapped, margin + 3, y + 6);
+      y += answerHeight + 10;
     }
 
     startPage();
-    let previousType: ExamType | null = null;
     exam.questions.forEach((question, index) => {
-      if (question.type !== previousType) {
-        if (y + 12 > bottom) {
-          pdf.addPage();
-          startPage();
-        }
-        pdf.setTextColor(39, 85, 66);
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(9);
-        pdf.text(getExamTypeLabel(question.type).toUpperCase(), margin, y);
-        y += 7;
-        previousType = question.type;
-      }
-      writeAnswer(`${String(index + 1).padStart(2, "0")}. ${answerLabel(question, exam.matchingChoices)}`);
+      writeAnswer(question, index + 1);
     });
-
-    const pageCount = pdf.getNumberOfPages();
-    for (let pageIndex = 1; pageIndex <= pageCount; pageIndex += 1) {
-      pdf.setPage(pageIndex);
-      pdf.setTextColor(102, 118, 110);
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(8);
-      pdf.text(`Page ${pageIndex} of ${pageCount}`, pageWidth - margin, pageHeight - 8, { align: "right" });
-    }
 
     const slug = exam.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "exam";
     pdf.save(`${slug}-answer-key-long-bond.pdf`);

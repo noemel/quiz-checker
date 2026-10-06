@@ -4,7 +4,7 @@ import { createWorker } from "tesseract.js";
 import Image from "next/image";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { ExamQuestion, ExamType, SavedExam } from "@/app/lib/exam-types";
-import { createAnswerSheetLayout, pageIndexFromOcr, readMarkedAnswers } from "./answer-sheet-omr";
+import { createAnswerSheetLayout, pageIndexFromOcr } from "./answer-sheet-omr";
 
 interface AnswerCheckRow {
   number: number;
@@ -27,17 +27,25 @@ function normalizeAnswer(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
 
-function parseResponseLines(text: string) {
+function parseResponseLines(text: string, fallbackQuestionIndexes?: number[]) {
   const numbered = new Map<number, string>();
   const unnumbered: string[] = [];
 
   text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => {
     const match = line.match(/^\s*(\d{1,3})\s*[.)\]:-]?\s+(.+?)\s*$/);
-    if (match) numbered.set(Number(match[1]), match[2].trim());
-    else unnumbered.push(line);
+    const content = (match ? match[2] : line)
+      .replace(/^(?:MC\s*A-D|T\s*\/\s*F|True\s*\/\s*False|Match(?:ing)?|ID|Answer)\s*:?\s*/i, "")
+      .trim();
+    if (!content || /^(?:MARKWISE|EXAM BUILDER|ANSWER SHEET|MATCHING CHOICES|STUDENT NAME|DATE|WRITE ONE ANSWER|PAGE\s+\d+)/i.test(content)) return;
+    if (!match && /^[A-Z]\.\s+/.test(content)) return;
+    if (match) numbered.set(Number(match[1]), content);
+    else unnumbered.push(content);
   });
 
-  return (questionIndex: number) => numbered.get(questionIndex + 1) ?? unnumbered[questionIndex] ?? "";
+  return (questionIndex: number) => {
+    const fallbackIndex = fallbackQuestionIndexes?.indexOf(questionIndex) ?? questionIndex;
+    return numbered.get(questionIndex + 1) ?? unnumbered[fallbackIndex] ?? "";
+  };
 }
 
 function getExpectedAnswer(question: ExamQuestion, exam: SavedExam) {
@@ -55,7 +63,7 @@ function getExpectedAnswer(question: ExamQuestion, exam: SavedExam) {
 
 function getRecognizedLabel(question: ExamQuestion, exam: SavedExam, response: string) {
   const value = response.trim().toUpperCase();
-  if (!value) return "No mark detected";
+  if (!value) return "No answer recognized";
   const selected = value.split("/").filter(Boolean);
 
   if (question.type === "multiple-choice") {
@@ -115,10 +123,10 @@ function matchesAnswer(question: ExamQuestion, exam: SavedExam, response: string
   return false;
 }
 
-function createResults(exam: SavedExam, responseText: string, markedResponses: Record<number, string>): AnswerCheckRow[] {
+function createResults(exam: SavedExam, responseText: string): AnswerCheckRow[] {
   const responseAt = parseResponseLines(responseText);
   return exam.questions.map((question, index) => {
-    const response = Object.hasOwn(markedResponses, index) ? markedResponses[index] : responseAt(index);
+    const response = responseAt(index);
     return {
       number: index + 1,
       type: question.type,
@@ -133,7 +141,6 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
   const [photo, setPhoto] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [responseText, setResponseText] = useState("");
-  const [markedResponses, setMarkedResponses] = useState<Record<number, string>>({});
   const [selectedPage, setSelectedPage] = useState(0);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraExpanded, setCameraExpanded] = useState(false);
@@ -253,50 +260,20 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
       const { data } = await worker.recognize(photo);
       const detectedPage = pageIndexFromOcr(data.text, answerSheetLayout.pageCount) ?? selectedPage;
       setSelectedPage(detectedPage);
-
-      let pageMarks: Map<number, string> | null = null;
-      let markingWarning = "";
-      try {
-        pageMarks = await readMarkedAnswers(photo, answerSheetLayout, detectedPage);
-      } catch (error) {
-        markingWarning = error instanceof Error
-          ? `${error.message} Use the answer-sheet PDF generated for this exam; OCR text is still available.`
-          : "Shaded bubbles could not be located. OCR text is still available.";
-      }
-
-      if (!data.text.trim() && !pageMarks) {
-        throw new Error(markingWarning || "No text or shaded answers were found. Try a clearer, closer photo.");
-      }
-
-      if (!pageMarks) {
-        setResponseText(data.text.trim());
-        setMarkedResponses({});
-        setReadError(markingWarning);
-        setResults(null);
-        return;
-      }
-
-      const nextMarkedResponses = { ...markedResponses };
-      answerSheetLayout.rows
-        .filter((row) => row.page === detectedPage && row.bubbles.length > 0)
-        .forEach((row) => {
-          nextMarkedResponses[row.questionIndex] = pageMarks?.get(row.questionIndex) ?? "";
-        });
-
+      if (!data.text.trim()) throw new Error("No written answers were recognized. Try a clearer, closer photo.");
       const previousResponseAt = parseResponseLines(responseText);
-      const scannedResponseAt = parseResponseLines(data.text);
+      const pageQuestionIndexes = answerSheetLayout.rows
+        .filter((row) => row.page === detectedPage)
+        .map((row) => row.questionIndex);
+      const scannedResponseAt = parseResponseLines(data.text, pageQuestionIndexes);
       const combinedResponseText = exam.questions.map((question, index) => {
         let response = previousResponseAt(index);
-        if (Object.hasOwn(nextMarkedResponses, index)) response = nextMarkedResponses[index];
-        else if (answerSheetLayout.rows[index].page === detectedPage && question.type === "identification") {
-          response = scannedResponseAt(index) || response;
-        }
+        if (answerSheetLayout.rows[index].page === detectedPage) response = scannedResponseAt(index) || response;
         return response.trim() ? `${index + 1}. ${response.trim()}` : "";
       }).filter(Boolean).join("\n");
 
-      setMarkedResponses(nextMarkedResponses);
       setResponseText(combinedResponseText);
-      setReadError("");
+      setReadError("OCR can misread handwriting. Review the recognized responses before grading.");
       setResults(null);
     } catch (error) {
       setReadError(error instanceof Error ? error.message : "The image could not be read.");
@@ -309,9 +286,9 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
   const correctCount = results?.filter((result) => result.status === "correct").length ?? 0;
   const unansweredCount = results?.filter((result) => result.status === "unanswered").length ?? 0;
   const recognizedResponseAt = parseResponseLines(responseText);
-  const hasRecognizedResponses = responseText.trim().length > 0 || Object.keys(markedResponses).length > 0;
+  const hasRecognizedResponses = responseText.trim().length > 0;
   const previewRows = exam.questions.map((question, index) => {
-    const response = Object.hasOwn(markedResponses, index) ? markedResponses[index] : recognizedResponseAt(index);
+    const response = recognizedResponseAt(index);
     return {
       number: index + 1,
       type: typeLabels[question.type],
@@ -345,7 +322,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
         <div className="answer-check-content">
           <div className="answer-capture-panel">
             <h3>Student response</h3>
-            <p>Scan one page of this exam&apos;s answer-sheet PDF at a time. Shade bubbles fully.</p>
+            <p>Scan one page of this exam&apos;s answer-sheet PDF at a time and review the written responses before grading.</p>
             <div className={`answer-camera-stage${cameraActive ? " is-live" : ""}${cameraExpanded ? " camera-expanded" : ""}`}>
               <video
                 ref={videoRef}
@@ -393,7 +370,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
             )}
             {photo && !cameraActive && (
               <button className="answer-read-button" type="button" onClick={() => void readPhoto()} disabled={isReading}>
-                {isReading ? `Reading image... ${progress}%` : "Read shaded bubbles and OCR"}
+                {isReading ? `Reading image... ${progress}%` : "Read answer sheet and OCR"}
               </button>
             )}
             {readError && <p className="field-error" role="alert">{readError}</p>}
@@ -408,13 +385,12 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
                 value={responseText}
                 onChange={(event) => {
                   setResponseText(event.target.value);
-                  setMarkedResponses({});
                   setResults(null);
                 }}
                 placeholder={"Enter one answer per line, for example:\n1. B\n2. True\n3. Water"}
               />
             </label>
-            <p className="answer-check-note">Filled bubbles are read optically. OCR is used for identification; review all responses before grading.</p>
+            <p className="answer-check-note">The sheet is reviewed for written responses and OCR-based identification; confirm each answer before grading.</p>
             {hasRecognizedResponses && (
               <section className="recognized-preview" aria-live="polite">
                 <header className="recognized-preview-heading">
@@ -439,10 +415,9 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
             )}
             <button className="text-action text-danger" type="button" onClick={() => {
               setResponseText("");
-              setMarkedResponses({});
               setResults(null);
             }}>Clear responses</button>
-            <button className="builder-primary-button answer-grade-button" type="button" onClick={() => setResults(createResults(exam, responseText, markedResponses))} disabled={!hasRecognizedResponses}>
+            <button className="builder-primary-button answer-grade-button" type="button" onClick={() => setResults(createResults(exam, responseText))} disabled={!hasRecognizedResponses}>
               Check preview against answer key <span aria-hidden="true">↗</span>
             </button>
           </div>

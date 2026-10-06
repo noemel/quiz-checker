@@ -89,10 +89,7 @@ export function createAnswerSheetLayout(
   let y = answerSheetStartY + (hasMatchingQuestions ? matchingChoiceBlockHeight(matchingChoices) : 0);
 
   questions.forEach((question, questionIndex) => {
-    const matchingLines = question.type === "matching"
-      ? Math.max(1, Math.ceil(matchingChoices.length / 11))
-      : 1;
-    const height = Math.max(12, matchingLines * 11);
+    const height = 12;
     if (y + height > answerSheetBottomY) {
       page += 1;
       y = answerSheetStartY;
