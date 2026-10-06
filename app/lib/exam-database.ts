@@ -9,8 +9,18 @@ type ExamDatabaseGlobal = typeof globalThis & {
 const databaseGlobal = globalThis as ExamDatabaseGlobal;
 
 async function createStore(): Promise<ExamStore> {
-  const mysqlUrl = process.env.MYSQL_URL?.trim();
   const databaseUrl = process.env.DATABASE_URL?.trim();
+  const mongoConnectionString = process.env.MONGODB_URI?.trim()
+    || process.env.MONGO_URL?.trim()
+    || (databaseUrl?.startsWith("mongodb://") || databaseUrl?.startsWith("mongodb+srv://")
+      ? databaseUrl
+      : undefined);
+  if (mongoConnectionString) {
+    const { createMongoExamStore } = await import("./exam-store-mongo");
+    return createMongoExamStore(mongoConnectionString);
+  }
+
+  const mysqlUrl = process.env.MYSQL_URL?.trim();
   const mysqlConnectionString = mysqlUrl ?? (databaseUrl?.startsWith("mysql://") ? databaseUrl : undefined);
   if (mysqlConnectionString) {
     const { createMysqlExamStore } = await import("./exam-store-mysql");
@@ -23,7 +33,7 @@ async function createStore(): Promise<ExamStore> {
   }
 
   if (process.env.VERCEL === "1") {
-    throw new Error("MYSQL_URL or DATABASE_URL must be configured on Vercel.");
+    throw new Error("MONGODB_URI, MYSQL_URL, or DATABASE_URL must be configured on Vercel.");
   }
 
   const { createSqliteExamStore } = await import("./exam-store-sqlite");

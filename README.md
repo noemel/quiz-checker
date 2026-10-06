@@ -1,22 +1,22 @@
 # Quiz Checker
 
-## Local MySQL with XAMPP
+## MongoDB
 
-1. Start **MySQL** from the XAMPP Control Panel.
-2. Open phpMyAdmin at `http://localhost/phpmyadmin` and import `database/schema.mysql.sql`.
-3. Copy `.env.example` to `.env.local`. For a default XAMPP installation, use:
+The app stores saved exams in the `exams` collection. It creates the collection and a unique index automatically on first use.
 
-   ```env
-   MYSQL_URL="mysql://root@127.0.0.1:3306/quiz_checker"
-   ```
+Set these environment variables in `.env.local` for local development and in **Vercel Project Settings > Environment Variables** for deployed environments:
 
-   If you set a MySQL root password, include it in the URL and URL-encode special characters.
-4. Install dependencies with `pnpm install`, then run `pnpm dev`.
+```env
+MONGODB_URI="mongodb+srv://<username>:<password>@<cluster-host>/quiz_checker?retryWrites=true&w=majority"
+MONGODB_DATABASE="quiz_checker"
+```
 
-The app also creates the `exams` table automatically when it first connects. The SQL file creates the database and the same table in advance.
+Use the connection URI supplied by your MongoDB provider. If the URI already names the database, `MONGODB_DATABASE` is optional. Keep the credentials server-only; do not use a `NEXT_PUBLIC_` prefix. Select Production and any other Vercel environments you deploy, then redeploy after changing variables.
 
-## Vercel
+The MongoDB server must allow connections from Vercel. Configure Atlas Network Access for your deployment's supported egress IPs or private connection. Avoid opening database access to the entire internet when a narrower option is available.
 
-XAMPP runs on your own computer, so a Vercel deployment cannot connect to that local MySQL server. Set `MYSQL_URL` in Vercel to a hosted MySQL database that accepts connections from Vercel, and create the `quiz_checker` database there. Do not expose your local XAMPP server to the public internet. An existing Neon Postgres connection can still be supplied as `DATABASE_URL` if preferred.
+MongoDB variables take precedence over the legacy MySQL (`MYSQL_URL`) and Neon/Postgres (`DATABASE_URL`) settings. Existing records in another database are not copied automatically; this app will read and write records in MongoDB after switching.
 
-Database URLs are server-only environment variables; do not prefix them with `NEXT_PUBLIC_` or commit real credentials.
+## Development
+
+Install dependencies with `pnpm install`, then run `pnpm dev`. Without a configured remote database, local development uses the existing SQLite fallback.
