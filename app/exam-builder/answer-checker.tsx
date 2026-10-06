@@ -53,6 +53,36 @@ function getExpectedAnswer(question: ExamQuestion, exam: SavedExam) {
   return question.correctAnswer;
 }
 
+function getRecognizedLabel(question: ExamQuestion, exam: SavedExam, response: string) {
+  const value = response.trim().toUpperCase();
+  if (!value) return "No mark detected";
+  const selected = value.split("/").filter(Boolean);
+
+  if (question.type === "multiple-choice") {
+    const labels = selected.map((label) => {
+      const choice = question.choices[answerLetters.indexOf(label)];
+      return choice ? `${label}. ${choice}` : label;
+    });
+    return labels.length > 1 ? `Multiple marks: ${labels.join("; ")}` : labels[0] ?? response;
+  }
+
+  if (question.type === "true-false") {
+    const labels = selected.map((label) => label === "T" ? "True" : label === "F" ? "False" : label);
+    return labels.length > 1 ? `Multiple marks: ${labels.join("; ")}` : labels[0] ?? response;
+  }
+
+  if (question.type === "matching") {
+    const labels = selected.map((label) => {
+      const optionIndex = label.charCodeAt(0) - 65;
+      const choice = exam.matchingChoices[optionIndex];
+      return choice ? `${label}. ${choice}` : label;
+    });
+    return labels.length > 1 ? `Multiple marks: ${labels.join("; ")}` : labels[0] ?? response;
+  }
+
+  return response;
+}
+
 function matchesAnswer(question: ExamQuestion, exam: SavedExam, response: string) {
   const normalizedResponse = normalizeAnswer(response);
   const normalizedExpected = normalizeAnswer(question.correctAnswer);
@@ -278,6 +308,19 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
 
   const correctCount = results?.filter((result) => result.status === "correct").length ?? 0;
   const unansweredCount = results?.filter((result) => result.status === "unanswered").length ?? 0;
+  const recognizedResponseAt = parseResponseLines(responseText);
+  const hasRecognizedResponses = responseText.trim().length > 0 || Object.keys(markedResponses).length > 0;
+  const previewRows = exam.questions.map((question, index) => {
+    const response = Object.hasOwn(markedResponses, index) ? markedResponses[index] : recognizedResponseAt(index);
+    return {
+      number: index + 1,
+      type: typeLabels[question.type],
+      label: getRecognizedLabel(question, exam, response),
+      hasMark: Boolean(response.trim()),
+      multipleMarks: response.includes("/"),
+    };
+  });
+  const detectedCount = previewRows.filter((row) => row.hasMark).length;
 
   return (
     <div className="answer-check-backdrop" role="presentation" onMouseDown={(event) => {
@@ -358,7 +401,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
 
           <div className="answer-response-panel">
             <label className="builder-field" htmlFor="recognized-answers">
-              <span>RECOGNIZED RESPONSES</span>
+              <span>RESPONSES / MANUAL CORRECTIONS</span>
               <textarea
                 id="recognized-answers"
                 className="builder-textarea recognized-answers"
@@ -372,13 +415,35 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
               />
             </label>
             <p className="answer-check-note">Filled bubbles are read optically. OCR is used for identification; review all responses before grading.</p>
+            {hasRecognizedResponses && (
+              <section className="recognized-preview" aria-live="polite">
+                <header className="recognized-preview-heading">
+                  <div>
+                    <h3>Scan preview</h3>
+                    <p>{detectedCount} of {exam.questions.length} responses detected</p>
+                  </div>
+                </header>
+                <div className="recognized-preview-table">
+                  <div className="recognized-preview-row recognized-preview-head"><span>ITEM</span><span>DETECTED RESPONSE</span><span>SCAN</span></div>
+                  {previewRows.map((row) => (
+                    <div className="recognized-preview-row" key={row.number}>
+                      <span>{String(row.number).padStart(2, "0")} · {row.type}</span>
+                      <span>{row.label}</span>
+                      <span className={`recognized-preview-status${row.multipleMarks ? " needs-review" : ""}`}>
+                        {row.multipleMarks ? "Multiple" : row.hasMark ? "Detected" : "Blank"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
             <button className="text-action text-danger" type="button" onClick={() => {
               setResponseText("");
               setMarkedResponses({});
               setResults(null);
             }}>Clear responses</button>
-            <button className="builder-primary-button answer-grade-button" type="button" onClick={() => setResults(createResults(exam, responseText, markedResponses))} disabled={!responseText.trim() && Object.keys(markedResponses).length === 0}>
-              Check against answer key <span aria-hidden="true">↗</span>
+            <button className="builder-primary-button answer-grade-button" type="button" onClick={() => setResults(createResults(exam, responseText, markedResponses))} disabled={!hasRecognizedResponses}>
+              Check preview against answer key <span aria-hidden="true">↗</span>
             </button>
           </div>
         </div>
