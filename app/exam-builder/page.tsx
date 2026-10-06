@@ -1,6 +1,8 @@
 'use client';
 
 import Link from "next/link";
+import * as pdfjsLib from "pdfjs-dist";
+import { createWorker } from "tesseract.js";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { jsPDF as JsPDFDocument } from "jspdf";
 import AnswerChecker from "./answer-checker";
@@ -8,6 +10,8 @@ import { createMatchingChoiceRows } from "./answer-sheet-omr";
 import { answerSheetPageHeight, answerSheetPageWidth, createAnswerSheetLayout } from "./answer-sheet-omr";
 import { validateExamDraft } from "@/app/lib/exam-validation";
 import { examTypes, normalizeExamDraft, type ExamDraft, type ExamQuestion, type ExamType, type ExamTypeCounts, type SavedExam, type ValidationIssue } from "@/app/lib/exam-types";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
 
 const examTypeLabels: Record<ExamType, string> = {
   "multiple-choice": "Multiple Choice",
@@ -58,6 +62,143 @@ function answerLabel(question: ExamQuestion, matchingChoices: string[]) {
   return question.correctAnswer;
 }
 
+async function recognizeDocumentText(file: File, onProgress: (progress: number) => void) {
+  const fileName = file.name.toLowerCase();
+
+  if (file.type === "application/pdf" || fileName.endsWith(".pdf")) {
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    let content = "";
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const pageText = await page.getTextContent();
+      const text = pageText.items
+        .map((item) => ("str" in item ? item.str : ""))
+        .join(" ");
+      content += `${text}\n`;
+      onProgress(Math.round((pageNumber / pdf.numPages) * 100));
+    }
+    if (!content.trim()) throw new Error("No readable text was found in this PDF.");
+    return content.trim();
+  }
+
+  if (file.type.startsWith("image/") || [".png", ".jpg", ".jpeg", ".bmp", ".webp"].some((extension) => fileName.endsWith(extension))) {
+    const worker = await createWorker("eng", 1, {
+      logger: (message) => {
+        if (message.status === "recognizing text") {
+          onProgress(Math.round(message.progress * 100));
+        }
+      },
+    });
+
+    try {
+      const { data } = await worker.recognize(file);
+      if (!data.text.trim()) throw new Error("No text could be read from the uploaded image.");
+      return data.text.trim();
+    } finally {
+      await worker.terminate();
+    }
+  }
+
+  if (file.type.includes("text") || fileName.endsWith(".txt")) {
+    const text = await file.text();
+    if (!text.trim()) throw new Error("This text file is empty.");
+    return text.trim();
+  }
+
+  throw new Error("Upload a PDF, image, or text file to scan an exam.");
+}
+
+function parseImportedExamDocument(rawText: string): Partial<ExamDraft> | null {
+  const normalized = rawText.replace(/\r/g, "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  if (normalized.length === 0) return null;
+
+  const title = normalized.find((line) => !/^question\s*\d+|^\d+[\).]|^match(?:ing)?|^true\s*\/\s*false|^multiple\s*choice|^identification/i.test(line) && line.length > 5)?.trim() ?? "Imported Exam";
+
+  const blocks: string[][] = [];
+  let current: string[] = [];
+
+  normalized.forEach((line) => {
+    const isQuestionMarker = /^\d+[\).]|^question\s*\d+[:\-.]|^q\s*\d+[:\-.]/i.test(line);
+    if (isQuestionMarker && current.length > 0) {
+      blocks.push(current);
+      current = [];
+    }
+    current.push(line);
+  });
+  if (current.length > 0) blocks.push(current);
+
+  const questions: ExamQuestion[] = [];
+  const matchingChoices: string[] = [];
+  const trimmedTitle = title.replace(/^[-•*\s]+|[-•*\s]+$/g, "").trim();
+
+  blocks.forEach((block, blockIndex) => {
+    const blockText = block.join(" ");
+    const lowerText = blockText.toLowerCase();
+    const isMultipleChoice = /\b(?:a|b|c|d)\b.*\b(?:a|b|c|d)\b|\b[a-d]\.[^\n]{0,80}/i.test(blockText) && !/true\s*\/\s*false|true or false|matching/i.test(blockText);
+    const isTrueFalse = /true\s*(?:\/|or|\-|\()\s*false|true or false|false\s*(?:\/|or|\-|\()\s*true/i.test(blockText);
+    const isMatching = /match(?:ing)?|column\s+[ab]|pair\s+the/i.test(blockText);
+
+    let prompt = block[0] ?? "";
+    const optionLines = block.filter((line) => /^\s*[A-D][\).\-:]\s+/i.test(line));
+    if (optionLines.length > 0) {
+      prompt = block.filter((line) => !/^\s*[A-D][\).\-:]\s+/i.test(line)).join(" ").trim() || prompt;
+    }
+
+    prompt = prompt
+      .replace(/^\d+[\).\-:]\s*/, "")
+      .replace(/^question\s*\d+[:\-.]\s*/i, "")
+      .trim();
+
+    const type: ExamType = isTrueFalse ? "true-false" : isMatching ? "matching" : isMultipleChoice ? "multiple-choice" : "identification";
+
+    const choices = optionLines.map((line) => line.replace(/^\s*[A-D][\).\-:]\s*/i, "").trim()).filter(Boolean);
+    const correctAnswer = (() => {
+      const answerMatch = blockText.match(/(?:correct|answer)\s*[:\-]?\s*([A-D]|true|false|[A-Z][^\n]*)/i);
+      if (!answerMatch) return "";
+      const answer = answerMatch[1].trim();
+      return answer.length > 0 ? answer : "";
+    })();
+
+    const question: ExamQuestion = {
+      id: `imported-question-${blockIndex + 1}`,
+      type,
+      prompt: prompt || `Imported question ${blockIndex + 1}`,
+      choices: type === "multiple-choice" ? choices.length ? choices : ["", "", "", ""] : [],
+      correctAnswer: type === "multiple-choice" && /^[A-D]$/i.test(correctAnswer) ? correctAnswer.toUpperCase() : correctAnswer.trim(),
+    };
+
+    if (type === "matching") {
+      const extracted = block
+        .map((line) => line.replace(/^\s*[A-D][\).\-:]\s*/i, "").trim())
+        .filter((line) => line.length > 0 && !/^match(?:ing)?/i.test(line) && !/^answer/i.test(line));
+      if (extracted.length > 0) {
+        matchingChoices.push(...extracted.slice(0, 6));
+      }
+    }
+
+    if (type !== "matching" || question.prompt.length > 0) {
+      questions.push(question);
+    }
+  });
+
+  if (questions.length === 0) return null;
+
+  const typeCounts = { "multiple-choice": 0, "true-false": 0, identification: 0, matching: 0 } as ExamTypeCounts;
+  questions.forEach((question) => {
+    typeCounts[question.type] += 1;
+  });
+
+  return {
+    title: trimmedTitle,
+    typeCounts,
+    itemCount: questions.length,
+    instructions: "Imported from document scan. Review each question and save when ready.",
+    matchingChoices: matchingChoices.length > 0 ? matchingChoices : ["", ""],
+    questions,
+  };
+}
+
 function drawLongPaperHeader(pdf: JsPDFDocument, examTitle: string, documentTitle: string, typeSummary: string) {
   const pageWidth = pdf.internal.pageSize.getWidth();
   const margin = 16;
@@ -104,7 +245,11 @@ export default function ExamBuilderPage() {
   const [isLoadingExams, setIsLoadingExams] = useState(true);
   const [savedListError, setSavedListError] = useState("");
   const [examPackageMessage, setExamPackageMessage] = useState("");
+  const [documentImportMessage, setDocumentImportMessage] = useState("");
+  const [isImportingDocument, setIsImportingDocument] = useState(false);
+  const [documentImportProgress, setDocumentImportProgress] = useState(0);
   const examPackageInputRef = useRef<HTMLInputElement | null>(null);
+  const documentInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -187,6 +332,51 @@ export default function ExamBuilderPage() {
     } catch (error) {
       setExamPackageMessage(error instanceof Error ? error.message : "This exam file could not be imported.");
     } finally {
+      input.value = "";
+    }
+  }
+
+  async function handleExamDocumentImport(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    setDocumentImportMessage("");
+    setIsImportingDocument(true);
+    setDocumentImportProgress(0);
+    try {
+      const text = await recognizeDocumentText(file, setDocumentImportProgress);
+      const draft = parseImportedExamDocument(text);
+      if (!draft || draft.questions?.length === 0) {
+        throw new Error("The document could not be read as an exam. Try a clearer image or a text file with numbered questions.");
+      }
+
+      const normalizedDraft = normalizeExamDraft(draft);
+      const validationIssues = validateExamDraft(normalizedDraft);
+      if (validationIssues.length > 0 && normalizedDraft.questions.length > 0) {
+        setFormMessage(`Imported with a few issues: ${validationIssues.slice(0, 2).map((issue) => issue.message).join(" · ")}`);
+      }
+
+      setTitle(normalizedDraft.title || "Imported Exam");
+      setItemCount(String(normalizedDraft.itemCount));
+      setTypeCounts({ ...normalizedDraft.typeCounts });
+      setPreparedTypeCounts({ ...normalizedDraft.typeCounts });
+      setPreparedCount(normalizedDraft.itemCount);
+      setQuestions(normalizedDraft.questions);
+      setInstructions(normalizedDraft.instructions);
+      setMatchingChoices(normalizedDraft.matchingChoices.length > 0 ? normalizedDraft.matchingChoices : ["", ""]);
+      setActiveQuestionId(normalizedDraft.questions[0]?.id ?? null);
+      setFormStarted(true);
+      setSetupStep(3);
+      setIssues([]);
+      setPreviewDraft(normalizedDraft);
+      setPreviewSavedExamId(null);
+      setDocumentImportMessage(`Imported “${normalizedDraft.title || "exam"}” and filled the builder. Review the preview and save when ready.`);
+    } catch (error) {
+      setDocumentImportMessage(error instanceof Error ? error.message : "The document could not be imported.");
+    } finally {
+      setIsImportingDocument(false);
+      setDocumentImportProgress(0);
       input.value = "";
     }
   }
@@ -729,6 +919,17 @@ export default function ExamBuilderPage() {
               <div className="builder-package-actions">
                 {editingExamId && <span className="editing-indicator">EDITING SAVED EXAM</span>}
                 <input
+                  ref={documentInputRef}
+                  className="file-input"
+                  type="file"
+                  accept=".pdf,image/*,.txt,.doc,.docx"
+                  onChange={handleExamDocumentImport}
+                  aria-label="Upload a scanned exam document or image"
+                />
+                <button className="builder-secondary-button" type="button" onClick={() => documentInputRef.current?.click()} disabled={isImportingDocument}>
+                  {isImportingDocument ? `Scanning... ${documentImportProgress}%` : "Scan exam document"}
+                </button>
+                <input
                   ref={examPackageInputRef}
                   className="file-input"
                   type="file"
@@ -744,6 +945,7 @@ export default function ExamBuilderPage() {
                 </button>
               </div>
             </div>
+            {documentImportMessage && <p className="builder-message success-message" role="status">{documentImportMessage}</p>}
             {examPackageMessage && <p className={`builder-message${examPackageMessage.startsWith("Imported") ? " success-message" : ""}`} role="status">{examPackageMessage}</p>}
 
             <div className="builder-steps" aria-label="Exam setup steps">
