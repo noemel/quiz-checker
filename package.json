@@ -12,6 +12,7 @@
     "@neondatabase/serverless": "^1.2.0",
     "fflate": "^0.8.3",
     "jspdf": "^4.2.1",
+    "mammoth": "^1.13.0",
     "mongodb": "^6.17.0",
     "mysql2": "^3.14.5",
     "next": "16.3.8",

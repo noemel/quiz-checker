@@ -1,6 +1,7 @@
 'use client';
 
 import Link from "next/link";
+import * as mammoth from "mammoth";
 import * as pdfjsLib from "pdfjs-dist";
 import { createWorker } from "tesseract.js";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
@@ -62,8 +63,19 @@ function answerLabel(question: ExamQuestion, matchingChoices: string[]) {
   return question.correctAnswer;
 }
 
-async function recognizeDocumentText(file: File, onProgress: (progress: number) => void) {
+async function extractDocumentText(file: File, onProgress: (progress: number) => void): Promise<string> {
   const fileName = file.name.toLowerCase();
+
+  if (fileName.endsWith(".docx") || file.type.includes("officedocument") || fileName.endsWith(".doc")) {
+    if (fileName.endsWith(".doc")) {
+      throw new Error("Legacy .doc files are not supported. Please upload a .docx, PDF, image, or text file.");
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const result = await mammoth.extractRawText({ arrayBuffer });
+    if (!result.value.trim()) throw new Error("No readable text was found in this Word document.");
+    return result.value.trim();
+  }
 
   if (file.type === "application/pdf" || fileName.endsWith(".pdf")) {
     const data = await file.arrayBuffer();
@@ -107,6 +119,10 @@ async function recognizeDocumentText(file: File, onProgress: (progress: number) 
   }
 
   throw new Error("Upload a PDF, image, or text file to scan an exam.");
+}
+
+async function recognizeDocumentText(file: File, onProgress: (progress: number) => void) {
+  return extractDocumentText(file, onProgress);
 }
 
 function parseImportedExamDocument(rawText: string): Partial<ExamDraft> | null {
@@ -304,44 +320,70 @@ export default function ExamBuilderPage() {
     setScannedDocumentPreview("");
     try {
       const extension = file.name.toLowerCase().split(".").pop();
-      if (extension !== "json") {
-        throw new Error("Choose a Markwise .json package.");
+
+      if (extension === "json") {
+        const parsed: unknown = JSON.parse(await file.text());
+        const envelope = typeof parsed === "object" && parsed !== null
+          ? parsed as Record<string, unknown>
+          : {};
+        if (envelope.format && envelope.format !== "markwise-exam-package") {
+          throw new Error("This file is not a Markwise exam package.");
+        }
+        if (envelope.format === "markwise-exam-package" && envelope.version !== 1) {
+          throw new Error("This exam package version is not supported.");
+        }
+        const draft = normalizeExamDraft(envelope.format === "markwise-exam-package" ? envelope.exam : parsed);
+
+        const validationIssues = validateExamDraft(draft);
+        if (validationIssues.length > 0) {
+          throw new Error(`The file is incomplete: ${validationIssues.map((issue) => issue.message).join(" ")}`);
+        }
+
+        setTitle(draft.title);
+        setItemCount(String(draft.itemCount));
+        setTypeCounts({ ...draft.typeCounts });
+        setPreparedTypeCounts({ ...draft.typeCounts });
+        setPreparedCount(draft.itemCount);
+        setQuestions(draft.questions);
+        setInstructions(draft.instructions);
+        setMatchingChoices(draft.matchingChoices);
+        setActiveQuestionId(draft.questions.find((question) => !question.prompt.trim())?.id ?? draft.questions[0]?.id ?? null);
+        setEditingExamId(null);
+        setFormStarted(true);
+        setSetupStep(3);
+        setIssues([]);
+        setFormMessage("");
+        setPreviewDraft(null);
+        setPreviewSavedExamId(null);
+        setExamPackageMessage(`Imported “${draft.title}” with its answer key. Save it to add it to Saved exams.`);
+        return;
       }
 
-      const parsed: unknown = JSON.parse(await file.text());
-      const envelope = typeof parsed === "object" && parsed !== null
-        ? parsed as Record<string, unknown>
-        : {};
-      if (envelope.format && envelope.format !== "markwise-exam-package") {
-        throw new Error("This file is not a Markwise exam package.");
-      }
-      if (envelope.format === "markwise-exam-package" && envelope.version !== 1) {
-        throw new Error("This exam package version is not supported.");
-      }
-      const draft = normalizeExamDraft(envelope.format === "markwise-exam-package" ? envelope.exam : parsed);
-
-      const validationIssues = validateExamDraft(draft);
-      if (validationIssues.length > 0) {
-        throw new Error(`The file is incomplete: ${validationIssues.map((issue) => issue.message).join(" ")}`);
+      const text = await extractDocumentText(file, () => undefined);
+      const draft = parseImportedExamDocument(text);
+      if (!draft || draft.questions?.length === 0) {
+        throw new Error("The document could not be read as an exam. Try a clearer file or a plain text version with numbered questions.");
       }
 
-      setTitle(draft.title);
-      setItemCount(String(draft.itemCount));
-      setTypeCounts({ ...draft.typeCounts });
-      setPreparedTypeCounts({ ...draft.typeCounts });
-      setPreparedCount(draft.itemCount);
-      setQuestions(draft.questions);
-      setInstructions(draft.instructions);
-      setMatchingChoices(draft.matchingChoices);
-      setActiveQuestionId(draft.questions.find((question) => !question.prompt.trim())?.id ?? draft.questions[0]?.id ?? null);
+      const normalizedDraft = normalizeExamDraft(draft);
+      setTitle(normalizedDraft.title || "Imported Exam");
+      setItemCount(String(normalizedDraft.itemCount));
+      setTypeCounts({ ...normalizedDraft.typeCounts });
+      setPreparedTypeCounts({ ...normalizedDraft.typeCounts });
+      setPreparedCount(normalizedDraft.itemCount);
+      setQuestions(normalizedDraft.questions);
+      setInstructions(normalizedDraft.instructions);
+      setMatchingChoices(normalizedDraft.matchingChoices.length > 0 ? normalizedDraft.matchingChoices : ["", ""]);
+      setActiveQuestionId(normalizedDraft.questions[0]?.id ?? null);
       setEditingExamId(null);
       setFormStarted(true);
       setSetupStep(3);
       setIssues([]);
-      setFormMessage("");
-      setPreviewDraft(null);
+      setFormMessage("Imported document loaded into the builder. Review each question and complete any missing answers before saving.");
+      setPreviewDraft(normalizedDraft);
       setPreviewSavedExamId(null);
-      setExamPackageMessage(`Imported “${draft.title}” with its answer key. Save it to add it to Saved exams.`);
+      setScannedDocumentPreview(text.trim());
+      setExamPackageMessage(`Imported document “${normalizedDraft.title || "exam"}” and filled the builder.`);
     } catch (error) {
       setExamPackageMessage(error instanceof Error ? error.message : "This exam file could not be imported.");
     } finally {
@@ -931,26 +973,15 @@ export default function ExamBuilderPage() {
               <div className="builder-package-actions">
                 {editingExamId && <span className="editing-indicator">EDITING SAVED EXAM</span>}
                 <input
-                  ref={documentInputRef}
-                  className="file-input"
-                  type="file"
-                  accept=".pdf,image/*,.txt,.doc,.docx"
-                  onChange={handleExamDocumentImport}
-                  aria-label="Upload a scanned exam document or image"
-                />
-                <button className="builder-secondary-button" type="button" onClick={() => documentInputRef.current?.click()} disabled={isImportingDocument}>
-                  {isImportingDocument ? `Scanning... ${documentImportProgress}%` : "Scan"}
-                </button>
-                <input
                   ref={examPackageInputRef}
                   className="file-input"
                   type="file"
-                  accept=".json,application/json"
+                  accept=".json,application/json,.doc,.docx,.txt,.pdf,image/*"
                   onChange={handleExamPackageUpload}
-                  aria-label="Upload a Markwise exam package with answer key"
+                  aria-label="Upload a Markwise exam package or document"
                 />
                 <button className="builder-secondary-button" type="button" onClick={() => examPackageInputRef.current?.click()}>
-                  Import exam package
+                  Import package / doc
                 </button>
                 <button className="builder-secondary-button" type="button" onClick={downloadExamPackage} disabled={!formStarted}>
                   Export one-file package
