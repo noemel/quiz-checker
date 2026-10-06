@@ -257,6 +257,7 @@ export default function ExamBuilderPage() {
   const [savedListError, setSavedListError] = useState("");
   const [examPackageMessage, setExamPackageMessage] = useState("");
   const [documentImportMessage, setDocumentImportMessage] = useState("");
+  const [scannedDocumentPreview, setScannedDocumentPreview] = useState("");
   const [isImportingDocument, setIsImportingDocument] = useState(false);
   const [documentImportProgress, setDocumentImportProgress] = useState(0);
   const examPackageInputRef = useRef<HTMLInputElement | null>(null);
@@ -300,6 +301,7 @@ export default function ExamBuilderPage() {
     if (!file) return;
 
     setExamPackageMessage("");
+    setScannedDocumentPreview("");
     try {
       const extension = file.name.toLowerCase().split(".").pop();
       if (extension !== "json") {
@@ -353,6 +355,7 @@ export default function ExamBuilderPage() {
     if (!file) return;
 
     setDocumentImportMessage("");
+    setScannedDocumentPreview("");
     setIsImportingDocument(true);
     setDocumentImportProgress(0);
     try {
@@ -377,6 +380,7 @@ export default function ExamBuilderPage() {
       setIssues([]);
       setPreviewDraft(normalizedDraft);
       setPreviewSavedExamId(null);
+      setScannedDocumentPreview(text.trim());
       setFormMessage("Imported document loaded into the builder. Review each question and complete any missing answers before saving.");
       setDocumentImportMessage(`Imported “${normalizedDraft.title || "exam"}” and filled the builder. Review the preview and save when ready.`);
     } catch (error) {
@@ -616,6 +620,7 @@ export default function ExamBuilderPage() {
     setEditingExamId(null);
     setIssues([]);
     setFormMessage("");
+    setScannedDocumentPreview("");
     setPreviewDraft(null);
     setPreviewSavedExamId(null);
   }
@@ -953,6 +958,16 @@ export default function ExamBuilderPage() {
               </div>
             </div>
             {documentImportMessage && <p className="builder-message success-message" role="status">Scanned exam imported: {documentImportMessage}</p>}
+            {scannedDocumentPreview && (
+              <div className="scanned-preview-panel" aria-live="polite">
+                <div className="builder-field-header">
+                  <span>SCANNED DOCUMENT PREVIEW</span>
+                  <span className="scanned-badge">Preview</span>
+                </div>
+                <p className="scanned-preview-meta">{questions.length} questions detected from the uploaded document.</p>
+                <pre className="scanned-preview-text">{scannedDocumentPreview.slice(0, 2500)}</pre>
+              </div>
+            )}
             {examPackageMessage && <p className={`builder-message${examPackageMessage.startsWith("Imported") ? " success-message" : ""}`} role="status">{examPackageMessage}</p>}
 
             <div className="builder-steps" aria-label="Exam setup steps">
