@@ -10,15 +10,16 @@ const databaseGlobal = globalThis as ExamDatabaseGlobal;
 
 async function createStore(): Promise<ExamStore> {
   const mysqlUrl = process.env.MYSQL_URL?.trim();
-  if (mysqlUrl) {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  const mysqlConnectionString = mysqlUrl ?? (databaseUrl?.startsWith("mysql://") ? databaseUrl : undefined);
+  if (mysqlConnectionString) {
     const { createMysqlExamStore } = await import("./exam-store-mysql");
-    return createMysqlExamStore(mysqlUrl);
+    return createMysqlExamStore(mysqlConnectionString);
   }
 
-  const connectionString = process.env.DATABASE_URL?.trim();
-  if (connectionString) {
+  if (databaseUrl) {
     const { createNeonExamStore } = await import("./exam-store-neon");
-    return createNeonExamStore(connectionString);
+    return createNeonExamStore(databaseUrl);
   }
 
   if (process.env.VERCEL === "1") {

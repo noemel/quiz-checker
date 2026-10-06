@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     return Response.json({ exams: await listExams() });
-  } catch {
+  } catch (error) {
+    console.error("Failed to list saved exams:", error);
     return Response.json({ error: "Saved exams could not be loaded." }, { status: 500 });
   }
 }
