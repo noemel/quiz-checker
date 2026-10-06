@@ -110,91 +110,102 @@ async function recognizeDocumentText(file: File, onProgress: (progress: number) 
 }
 
 function parseImportedExamDocument(rawText: string): Partial<ExamDraft> | null {
-  const normalized = rawText.replace(/\r/g, "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
-  if (normalized.length === 0) return null;
+  const lines = rawText
+    .replace(/\r/g, "")
+    .replace(/[\u00A0]/g, " ")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^(?:answer\s*key|key|page\s+\d+|page\s*\d+\s*of\s*\d+)$/i.test(line));
 
-  const title = normalized.find((line) => !/^question\s*\d+|^\d+[\).]|^match(?:ing)?|^true\s*\/\s*false|^multiple\s*choice|^identification/i.test(line) && line.length > 5)?.trim() ?? "Imported Exam";
+  if (lines.length === 0) return null;
 
+  const questionStartPattern = /^(?:question\s*)?(?:q\s*)?(\d+)[\).\]:-]|^\d+[\).]\s+/i;
+  const firstQuestionIndex = lines.findIndex((line) => questionStartPattern.test(line));
+
+  const title = firstQuestionIndex > 0
+    ? lines.slice(0, firstQuestionIndex).filter((line) => !/^(?:teacher|subject|course|date|section|instructions?|answer\s*key|key)$/i.test(line)).join(" ").trim()
+    : "Imported Exam";
+
+  const questionLines = firstQuestionIndex >= 0 ? lines.slice(firstQuestionIndex) : lines;
   const blocks: string[][] = [];
   let current: string[] = [];
 
-  normalized.forEach((line) => {
-    const isQuestionMarker = /^\d+[\).]|^question\s*\d+[:\-.]|^q\s*\d+[:\-.]/i.test(line);
-    if (isQuestionMarker && current.length > 0) {
+  for (const line of questionLines) {
+    const startsQuestion = questionStartPattern.test(line);
+    if (startsQuestion && current.length > 0) {
       blocks.push(current);
       current = [];
     }
     current.push(line);
-  });
+  }
   if (current.length > 0) blocks.push(current);
 
+  if (blocks.length === 0) return null;
+
   const questions: ExamQuestion[] = [];
-  const matchingChoices: string[] = [];
-  const trimmedTitle = title.replace(/^[-•*\s]+|[-•*\s]+$/g, "").trim();
+  const matchingChoices = new Set<string>();
+  const typeCounts = { "multiple-choice": 0, "true-false": 0, identification: 0, matching: 0 } as ExamTypeCounts;
 
   blocks.forEach((block, blockIndex) => {
-    const blockText = block.join(" ");
-    const lowerText = blockText.toLowerCase();
-    const isMultipleChoice = /\b(?:a|b|c|d)\b.*\b(?:a|b|c|d)\b|\b[a-d]\.[^\n]{0,80}/i.test(blockText) && !/true\s*\/\s*false|true or false|matching/i.test(blockText);
-    const isTrueFalse = /true\s*(?:\/|or|\-|\()\s*false|true or false|false\s*(?:\/|or|\-|\()\s*true/i.test(blockText);
-    const isMatching = /match(?:ing)?|column\s+[ab]|pair\s+the/i.test(blockText);
+    const blockText = block.join(" ").replace(/\s+/g, " ").trim();
+    if (!blockText) return;
 
-    let prompt = block[0] ?? "";
-    const optionLines = block.filter((line) => /^\s*[A-D][\).\-:]\s+/i.test(line));
-    if (optionLines.length > 0) {
-      prompt = block.filter((line) => !/^\s*[A-D][\).\-:]\s+/i.test(line)).join(" ").trim() || prompt;
-    }
+    const rawPromptLines = block
+      .map((line) => line.replace(/^(?:question\s*)?(?:q\s*)?(?:\d+)[\).\]:-]\s*/i, "").trim())
+      .filter((line) => line.length > 0);
 
-    prompt = prompt
-      .replace(/^\d+[\).\-:]\s*/, "")
-      .replace(/^question\s*\d+[:\-.]\s*/i, "")
-      .trim();
+    const optionMatches = rawPromptLines.flatMap((line) => {
+      const match = line.match(/^([A-D]|[1-4])[\).\-:]\s*(.+)$/i);
+      return match ? [{ label: match[1].toUpperCase(), value: match[2].trim() }] : [];
+    });
 
-    const type: ExamType = isTrueFalse ? "true-false" : isMatching ? "matching" : isMultipleChoice ? "multiple-choice" : "identification";
+    const textOnlyLines = rawPromptLines.filter((line) => !/^([A-D]|[1-4])[\).\-:]\s+/.test(line));
+    const promptText = textOnlyLines.join(" ").trim();
 
-    const choices = optionLines.map((line) => line.replace(/^\s*[A-D][\).\-:]\s*/i, "").trim()).filter(Boolean);
-    const correctAnswer = (() => {
-      const answerMatch = blockText.match(/(?:correct|answer)\s*[:\-]?\s*([A-D]|true|false|[A-Z][^\n]*)/i);
-      if (!answerMatch) return "";
-      const answer = answerMatch[1].trim();
-      return answer.length > 0 ? answer : "";
-    })();
+    const valueText = optionMatches.map((entry) => entry.value).join(" ");
+    const isMatching = /match(?:ing)?\b|\bpair\s+the\b|\bcolumn\s+[a-z]\b/i.test(blockText)
+      || (optionMatches.length >= 2 && /\b(?:dog|cat|bird|fish|apple|banana|red|blue|country|city)\b/i.test(valueText));
+    const isTrueFalse = !isMatching && (
+      /\btrue\b.*\bfalse\b|\bfalse\b.*\btrue\b|\btrue\s*\/\s*false\b|\btrue\s*or\s*false\b/i.test(blockText)
+      || (optionMatches.length >= 2 && optionMatches.every((entry) => /^(true|false)$/i.test(entry.value.trim())))
+    );
+    const isMultipleChoice = !isMatching && !isTrueFalse && optionMatches.length >= 2;
+
+    const type: ExamType = isMatching ? "matching" : isTrueFalse ? "true-false" : isMultipleChoice ? "multiple-choice" : "identification";
+
+    const choices = optionMatches.map((entry) => entry.value)
+      .filter((value) => value && value.length > 0)
+      .slice(0, 4);
+
+    const prompt = promptText || blockText.replace(/(?:^|\s)(?:[A-D]|[1-4])[\).\-:]\s*[^A-D]+/gi, "").replace(/\s{2,}/g, " ").trim() || `Imported question ${blockIndex + 1}`;
 
     const question: ExamQuestion = {
       id: `imported-question-${blockIndex + 1}`,
       type,
-      prompt: prompt || `Imported question ${blockIndex + 1}`,
-      choices: type === "multiple-choice" ? choices.length ? choices : ["", "", "", ""] : [],
-      correctAnswer: type === "multiple-choice" && /^[A-D]$/i.test(correctAnswer) ? correctAnswer.toUpperCase() : correctAnswer.trim(),
+      prompt,
+      choices: type === "multiple-choice" ? (choices.length >= 2 ? choices : ["", "", "", ""]) : type === "true-false" ? ["True", "False"] : [],
+      correctAnswer: "",
     };
 
     if (type === "matching") {
-      const extracted = block
-        .map((line) => line.replace(/^\s*[A-D][\).\-:]\s*/i, "").trim())
-        .filter((line) => line.length > 0 && !/^match(?:ing)?/i.test(line) && !/^answer/i.test(line));
-      if (extracted.length > 0) {
-        matchingChoices.push(...extracted.slice(0, 6));
-      }
+      choices.forEach((choice) => {
+        if (choice.trim()) matchingChoices.add(choice.trim());
+      });
     }
 
-    if (type !== "matching" || question.prompt.length > 0) {
-      questions.push(question);
-    }
+    questions.push(question);
+    typeCounts[question.type] += 1;
   });
 
   if (questions.length === 0) return null;
 
-  const typeCounts = { "multiple-choice": 0, "true-false": 0, identification: 0, matching: 0 } as ExamTypeCounts;
-  questions.forEach((question) => {
-    typeCounts[question.type] += 1;
-  });
-
   return {
-    title: trimmedTitle,
+    title: title.replace(/^[-•*\s]+|[-•*\s]+$/g, "").trim() || "Imported Exam",
     typeCounts,
     itemCount: questions.length,
     instructions: "Imported from document scan. Review each question and save when ready.",
-    matchingChoices: matchingChoices.length > 0 ? matchingChoices : ["", ""],
+    matchingChoices: [...matchingChoices].slice(0, 8).length > 0 ? [...matchingChoices].slice(0, 8) : ["", ""],
     questions,
   };
 }
@@ -352,11 +363,6 @@ export default function ExamBuilderPage() {
       }
 
       const normalizedDraft = normalizeExamDraft(draft);
-      const validationIssues = validateExamDraft(normalizedDraft);
-      if (validationIssues.length > 0 && normalizedDraft.questions.length > 0) {
-        setFormMessage(`Imported with a few issues: ${validationIssues.slice(0, 2).map((issue) => issue.message).join(" · ")}`);
-      }
-
       setTitle(normalizedDraft.title || "Imported Exam");
       setItemCount(String(normalizedDraft.itemCount));
       setTypeCounts({ ...normalizedDraft.typeCounts });
@@ -371,6 +377,7 @@ export default function ExamBuilderPage() {
       setIssues([]);
       setPreviewDraft(normalizedDraft);
       setPreviewSavedExamId(null);
+      setFormMessage("Imported document loaded into the builder. Review each question and complete any missing answers before saving.");
       setDocumentImportMessage(`Imported “${normalizedDraft.title || "exam"}” and filled the builder. Review the preview and save when ready.`);
     } catch (error) {
       setDocumentImportMessage(error instanceof Error ? error.message : "The document could not be imported.");
