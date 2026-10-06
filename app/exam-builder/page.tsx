@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { jsPDF as JsPDFDocument } from "jspdf";
 import AnswerChecker from "./answer-checker";
+import { createMatchingChoiceRows } from "./answer-sheet-omr";
+import { answerSheetMarkers, answerSheetPageHeight, answerSheetPageWidth, createAnswerSheetLayout } from "./answer-sheet-omr";
 import { validateExamDraft } from "@/app/lib/exam-validation";
 import { examTypes, normalizeExamDraft, type ExamDraft, type ExamQuestion, type ExamType, type ExamTypeCounts, type SavedExam, type ValidationIssue } from "@/app/lib/exam-types";
 
@@ -423,100 +425,72 @@ export default function ExamBuilderPage() {
 
   async function downloadAnswerSheetPdf(exam: ExamDraft) {
     const { jsPDF } = await import("jspdf");
-    const pdf = new jsPDF({ unit: "mm", format: [215.9, 330.2] });
+    const pdf = new jsPDF({ unit: "mm", format: [answerSheetPageWidth, answerSheetPageHeight] });
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
     const margin = 16;
-    const contentWidth = pageWidth - margin * 2;
-    const bottom = pageHeight - 17;
-    let y = 62;
+    const layout = createAnswerSheetLayout(exam.questions, exam.matchingChoices);
 
     function startPage() {
       drawLongPaperHeader(pdf, exam.title, "Answer Sheet", `${exam.itemCount} items`);
-      y = 62;
-    }
-
-    function ensureRoom(height: number) {
-      if (y + height > bottom) {
-        pdf.addPage();
-        startPage();
+      pdf.setFillColor(0, 0, 0);
+      answerSheetMarkers.forEach(({ x, y }) => pdf.rect(x - 2, y - 2, 4, 4, "F"));
+      pdf.setTextColor(23, 44, 37);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.text("Student name:", margin, 62);
+      pdf.line(margin + 24, 63, 126, 63);
+      pdf.text("Date:", 143, 62);
+      pdf.line(155, 63, pageWidth - margin, 63);
+      pdf.setFontSize(7);
+      pdf.text("Shade one circle for each item. For matching, shade the letter of the chosen option.", margin, 73);
+      if (pdf.getNumberOfPages() === 1 && exam.questions.some((question) => question.type === "matching")) {
+        pdf.setFont("helvetica", "bold");
+        pdf.text("MATCHING CHOICES", margin, 82);
+        let choiceY = 88;
+        createMatchingChoiceRows(exam.matchingChoices).forEach((choiceRow) => {
+          choiceRow.entries.forEach((entry, entryIndex) => {
+            const x = entryIndex === 0 ? margin : pageWidth / 2 + 2;
+            pdf.setFont("helvetica", "bold");
+            pdf.text(`${entry.label}.`, x, choiceY);
+            pdf.setFont("helvetica", "normal");
+            entry.lines.forEach((line, lineIndex) => {
+              pdf.text(line, x + 7, choiceY + lineIndex * 3.5);
+            });
+          });
+          choiceY += choiceRow.height;
+        });
       }
     }
 
     startPage();
-    pdf.setTextColor(23, 44, 37);
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(9);
-    pdf.text("Student name:", margin, y);
-    pdf.line(margin + 24, y + 1, 126, y + 1);
-    pdf.text("Date:", 143, y);
-    pdf.line(155, y + 1, pageWidth - margin, y + 1);
-    y += 14;
-
-    if (exam.typeCounts.matching > 0) {
-      ensureRoom(23);
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(9);
-      pdf.text("MATCHING CHOICES", margin, y);
-      y += 7;
-      const matchingChoiceText = exam.matchingChoices
-        .filter((choice) => choice.trim())
-        .map((choice, index) => `${String.fromCharCode(65 + index)}. ${choice}`)
-        .join("     ");
-      const choiceLines = pdf.splitTextToSize(matchingChoiceText, contentWidth) as string[];
-      ensureRoom(choiceLines.length * 5 + 7);
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(9);
-      pdf.text(choiceLines, margin, y);
-      y += choiceLines.length * 5 + 5;
-    }
-
-    let previousType: ExamType | null = null;
-    exam.questions.forEach((question, index) => {
-      if (question.type !== previousType) {
-        ensureRoom(15);
-        pdf.setFillColor(241, 246, 241);
-        pdf.rect(margin, y, contentWidth, 8, "F");
-        pdf.setTextColor(39, 85, 66);
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(8);
-        pdf.text(getExamTypeLabel(question.type).toUpperCase(), margin + 3, y + 5.5);
-        y += 12;
-        previousType = question.type;
+    layout.rows.forEach((row) => {
+      while (pdf.getNumberOfPages() <= row.page) {
+        pdf.addPage();
+        startPage();
       }
-
-      ensureRoom(11);
+      const question = exam.questions[row.questionIndex];
       pdf.setTextColor(23, 44, 37);
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(9);
-      pdf.text(String(index + 1).padStart(2, "0"), margin + 1, y + 2.5);
+      pdf.text(String(row.questionIndex + 1).padStart(2, "0"), margin + 1, row.y + 3);
 
-      if (question.type === "multiple-choice") {
-        choiceLetters.forEach((letter, choiceIndex) => {
-          const centerX = margin + 37 + choiceIndex * 31;
-          pdf.setDrawColor(95, 119, 104);
-          pdf.circle(centerX, y, 3.4, "S");
-          pdf.setFont("helvetica", "normal");
-          pdf.setFontSize(7);
-          pdf.text(letter, centerX, y + 1, { align: "center" });
-        });
-      } else if (question.type === "true-false") {
-        ["T", "F"].forEach((letter, optionIndex) => {
-          const centerX = margin + 38 + optionIndex * 31;
-          pdf.setDrawColor(95, 119, 104);
-          pdf.circle(centerX, y, 3.4, "S");
-          pdf.setFont("helvetica", "normal");
-          pdf.setFontSize(7);
-          pdf.text(letter, centerX, y + 1, { align: "center" });
-        });
-      } else {
+      if (question.type === "identification") {
         pdf.setDrawColor(151, 166, 154);
-        pdf.line(margin + 27, y + 4, pageWidth - margin, y + 4);
+        pdf.line(margin + 38, row.y + 6, pageWidth - margin, row.y + 6);
+        return;
       }
-      y += 11;
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7);
+      row.bubbles.forEach(({ label, x, y }) => {
+        pdf.setDrawColor(58, 76, 65);
+        pdf.circle(x, y, 3.2, "S");
+        pdf.text(label, x + 4, y + 1.2);
+      });
     });
 
-    const pageCount = pdf.getNumberOfPages();
+    const pageCount = layout.pageCount;
     for (let pageIndex = 1; pageIndex <= pageCount; pageIndex += 1) {
       pdf.setPage(pageIndex);
       pdf.setTextColor(102, 118, 110);

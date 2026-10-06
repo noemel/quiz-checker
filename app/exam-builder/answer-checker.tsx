@@ -4,6 +4,7 @@ import { createWorker } from "tesseract.js";
 import Image from "next/image";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { ExamQuestion, ExamType, SavedExam } from "@/app/lib/exam-types";
+import { createAnswerSheetLayout, pageIndexFromOcr, readMarkedAnswers } from "./answer-sheet-omr";
 
 interface AnswerCheckRow {
   number: number;
@@ -56,6 +57,7 @@ function matchesAnswer(question: ExamQuestion, exam: SavedExam, response: string
   const normalizedResponse = normalizeAnswer(response);
   const normalizedExpected = normalizeAnswer(question.correctAnswer);
   if (!normalizedResponse || !normalizedExpected) return false;
+  if (response.includes("/")) return false;
   if (normalizedResponse === normalizedExpected) return true;
 
   if (question.type === "multiple-choice") {
@@ -83,10 +85,10 @@ function matchesAnswer(question: ExamQuestion, exam: SavedExam, response: string
   return false;
 }
 
-function createResults(exam: SavedExam, responseText: string): AnswerCheckRow[] {
+function createResults(exam: SavedExam, responseText: string, markedResponses: Record<number, string>): AnswerCheckRow[] {
   const responseAt = parseResponseLines(responseText);
   return exam.questions.map((question, index) => {
-    const response = responseAt(index);
+    const response = Object.hasOwn(markedResponses, index) ? markedResponses[index] : responseAt(index);
     return {
       number: index + 1,
       type: question.type,
@@ -101,6 +103,8 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
   const [photo, setPhoto] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [responseText, setResponseText] = useState("");
+  const [markedResponses, setMarkedResponses] = useState<Record<number, string>>({});
+  const [selectedPage, setSelectedPage] = useState(0);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraExpanded, setCameraExpanded] = useState(false);
   const [cameraError, setCameraError] = useState("");
@@ -108,6 +112,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
   const [isReading, setIsReading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<AnswerCheckRow[] | null>(null);
+  const answerSheetLayout = createAnswerSheetLayout(exam.questions, exam.matchingChoices);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const uploadRef = useRef<HTMLInputElement | null>(null);
@@ -123,7 +128,6 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
   function setImage(file: File) {
     setPhoto(file);
     setPreviewUrl(URL.createObjectURL(file));
-    setResponseText("");
     setResults(null);
     setReadError("");
     setProgress(0);
@@ -217,8 +221,52 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
         },
       });
       const { data } = await worker.recognize(photo);
-      if (!data.text.trim()) throw new Error("No text was found. Try a clearer, closer photo.");
-      setResponseText(data.text.trim());
+      const detectedPage = pageIndexFromOcr(data.text, answerSheetLayout.pageCount) ?? selectedPage;
+      setSelectedPage(detectedPage);
+
+      let pageMarks: Map<number, string> | null = null;
+      let markingWarning = "";
+      try {
+        pageMarks = await readMarkedAnswers(photo, answerSheetLayout, detectedPage);
+      } catch (error) {
+        markingWarning = error instanceof Error
+          ? `${error.message} Use the answer-sheet PDF generated for this exam; OCR text is still available.`
+          : "Shaded bubbles could not be located. OCR text is still available.";
+      }
+
+      if (!data.text.trim() && !pageMarks) {
+        throw new Error(markingWarning || "No text or shaded answers were found. Try a clearer, closer photo.");
+      }
+
+      if (!pageMarks) {
+        setResponseText(data.text.trim());
+        setMarkedResponses({});
+        setReadError(markingWarning);
+        setResults(null);
+        return;
+      }
+
+      const nextMarkedResponses = { ...markedResponses };
+      answerSheetLayout.rows
+        .filter((row) => row.page === detectedPage && row.bubbles.length > 0)
+        .forEach((row) => {
+          nextMarkedResponses[row.questionIndex] = pageMarks?.get(row.questionIndex) ?? "";
+        });
+
+      const previousResponseAt = parseResponseLines(responseText);
+      const scannedResponseAt = parseResponseLines(data.text);
+      const combinedResponseText = exam.questions.map((question, index) => {
+        let response = previousResponseAt(index);
+        if (Object.hasOwn(nextMarkedResponses, index)) response = nextMarkedResponses[index];
+        else if (answerSheetLayout.rows[index].page === detectedPage && question.type === "identification") {
+          response = scannedResponseAt(index) || response;
+        }
+        return response.trim() ? `${index + 1}. ${response.trim()}` : "";
+      }).filter(Boolean).join("\n");
+
+      setMarkedResponses(nextMarkedResponses);
+      setResponseText(combinedResponseText);
+      setReadError("");
       setResults(null);
     } catch (error) {
       setReadError(error instanceof Error ? error.message : "The image could not be read.");
@@ -254,7 +302,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
         <div className="answer-check-content">
           <div className="answer-capture-panel">
             <h3>Student response</h3>
-            <p>Capture a clear answer sheet or upload an image file.</p>
+            <p>Scan one page of this exam&apos;s answer-sheet PDF at a time. Shade bubbles fully.</p>
             <div className={`answer-camera-stage${cameraActive ? " is-live" : ""}${cameraExpanded ? " camera-expanded" : ""}`}>
               <video
                 ref={videoRef}
@@ -290,9 +338,19 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
               </div>
             )}
             {cameraError && <p className="field-error" role="alert">{cameraError}</p>}
+            {answerSheetLayout.pageCount > 1 && (
+              <label className="builder-field" htmlFor="answer-sheet-page">
+                <span>PAGE TO SCAN</span>
+                <select id="answer-sheet-page" className="builder-select" value={selectedPage} onChange={(event) => setSelectedPage(Number(event.target.value))}>
+                  {Array.from({ length: answerSheetLayout.pageCount }, (_, pageIndex) => (
+                    <option value={pageIndex} key={pageIndex}>Page {pageIndex + 1}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             {photo && !cameraActive && (
               <button className="answer-read-button" type="button" onClick={() => void readPhoto()} disabled={isReading}>
-                {isReading ? `Reading image... ${progress}%` : "Read image with OCR"}
+                {isReading ? `Reading image... ${progress}%` : "Read shaded bubbles and OCR"}
               </button>
             )}
             {readError && <p className="field-error" role="alert">{readError}</p>}
@@ -307,13 +365,19 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
                 value={responseText}
                 onChange={(event) => {
                   setResponseText(event.target.value);
+                  setMarkedResponses({});
                   setResults(null);
                 }}
                 placeholder={"Enter one answer per line, for example:\n1. B\n2. True\n3. Water"}
               />
             </label>
-            <p className="answer-check-note">OCR is a first pass. Review handwriting recognition and grading before recording results.</p>
-            <button className="builder-primary-button answer-grade-button" type="button" onClick={() => setResults(createResults(exam, responseText))} disabled={!responseText.trim()}>
+            <p className="answer-check-note">Filled bubbles are read optically. OCR is used for identification; review all responses before grading.</p>
+            <button className="text-action text-danger" type="button" onClick={() => {
+              setResponseText("");
+              setMarkedResponses({});
+              setResults(null);
+            }}>Clear responses</button>
+            <button className="builder-primary-button answer-grade-button" type="button" onClick={() => setResults(createResults(exam, responseText, markedResponses))} disabled={!responseText.trim() && Object.keys(markedResponses).length === 0}>
               Check against answer key <span aria-hidden="true">↗</span>
             </button>
           </div>
