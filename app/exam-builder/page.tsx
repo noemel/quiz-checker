@@ -443,7 +443,7 @@ export default function ExamBuilderPage() {
       pdf.text("Date:", 143, 62);
       pdf.line(155, 63, pageWidth - margin, 63);
       pdf.setFontSize(7);
-      pdf.text("Shade one circle for each item. For matching, shade the letter of the chosen option.", margin, 73);
+      pdf.text("Shade one circle below the letter for each item. For matching, choose the letter of the correct option.", margin, 73);
       if (pdf.getNumberOfPages() === 1 && exam.questions.some((question) => question.type === "matching")) {
         pdf.setFont("helvetica", "bold");
         pdf.text("MATCHING CHOICES", margin, 82);
@@ -486,7 +486,7 @@ export default function ExamBuilderPage() {
       row.bubbles.forEach(({ label, x, y }) => {
         pdf.setDrawColor(58, 76, 65);
         pdf.circle(x, y, 3.2, "S");
-        pdf.text(label, x + 4, y + 1.2);
+        pdf.text(label, x, y - 4, { align: "center" });
       });
     });
 
