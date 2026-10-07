@@ -674,6 +674,7 @@ export default function ExamBuilderPage() {
     const { jsPDF } = await import("jspdf");
     const pdf = new jsPDF({ unit: "mm", format: [answerSheetPageWidth, answerSheetPageHeight] });
     const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
     const margin = 14;
     const layout = createAnswerSheetLayout(exam.questions, exam.matchingChoices);
 
@@ -689,13 +690,13 @@ export default function ExamBuilderPage() {
       pdf.text("Answer Sheet", margin, 23);
       pdf.setTextColor(23, 44, 37);
       pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(7);
-      pdf.text("Write one answer on each line. Use the option letter for MC and matching; write True or False for T/F.", margin, 36);
+      pdf.setFontSize(9);
+      pdf.text(`Subject: ${exam.title}`, margin, 38, { maxWidth: pageWidth - margin * 2 });
       if (pdf.getNumberOfPages() === 1 && exam.questions.some((question) => question.type === "matching")) {
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(7);
-        pdf.text("Matching choices", margin, 44);
-        let choiceY = 49;
+        pdf.text("Matching choices", margin, 46);
+        let choiceY = 51;
         createMatchingChoiceRows(exam.matchingChoices).forEach((choiceRow) => {
           choiceRow.entries.forEach((entry, entryIndex) => {
             const x = entryIndex === 0 ? margin : pageWidth / 2 + 2;
@@ -710,6 +711,10 @@ export default function ExamBuilderPage() {
           choiceY += choiceRow.height;
         });
       }
+      pdf.setTextColor(102, 118, 110);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7);
+      pdf.text("MC = Multiple Choice   ID = Identification   MATCH = Matching", margin, pageHeight - 7);
     }
 
     startPage();
