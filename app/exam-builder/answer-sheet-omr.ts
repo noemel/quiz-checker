@@ -2,7 +2,7 @@ import type { ExamType } from "@/app/lib/exam-types";
 
 export const answerSheetPageWidth = 215.9;
 export const answerSheetPageHeight = 330.2;
-export const answerSheetStartY = 20;
+export const answerSheetStartY = 43;
 export const answerSheetBottomY = 302;
 export const answerSheetRowHeight = 7.5;
 export const answerSheetMarkers = [

@@ -678,15 +678,24 @@ export default function ExamBuilderPage() {
     const layout = createAnswerSheetLayout(exam.questions, exam.matchingChoices);
 
     function startPage() {
+      pdf.setFillColor(23, 98, 77);
+      pdf.rect(0, 0, pageWidth, 30, "F");
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8);
+      pdf.text("MARKWISE  /  EXAM BUILDER", margin, 10);
+      pdf.setFont("times", "bold");
+      pdf.setFontSize(19);
+      pdf.text("Answer Sheet", margin, 23);
       pdf.setTextColor(23, 44, 37);
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(7);
-      pdf.text("Write one answer on each line. Use the option letter for MC and matching; write True or False for T/F.", margin, 12);
+      pdf.text("Write one answer on each line. Use the option letter for MC and matching; write True or False for T/F.", margin, 36);
       if (pdf.getNumberOfPages() === 1 && exam.questions.some((question) => question.type === "matching")) {
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(7);
-        pdf.text("Matching choices", margin, 20);
-        let choiceY = 25;
+        pdf.text("Matching choices", margin, 44);
+        let choiceY = 49;
         createMatchingChoiceRows(exam.matchingChoices).forEach((choiceRow) => {
           choiceRow.entries.forEach((entry, entryIndex) => {
             const x = entryIndex === 0 ? margin : pageWidth / 2 + 2;
