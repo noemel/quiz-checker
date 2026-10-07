@@ -674,33 +674,28 @@ export default function ExamBuilderPage() {
     const { jsPDF } = await import("jspdf");
     const pdf = new jsPDF({ unit: "mm", format: [answerSheetPageWidth, answerSheetPageHeight] });
     const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const margin = 16;
+    const margin = 14;
     const layout = createAnswerSheetLayout(exam.questions, exam.matchingChoices);
 
     function startPage() {
-      drawLongPaperHeader(pdf, exam.title, "Answer Sheet", `${exam.itemCount} items`);
       pdf.setTextColor(23, 44, 37);
       pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(9);
-      pdf.text("Student name:", margin, 62);
-      pdf.line(margin + 24, 63, 126, 63);
-      pdf.text("Date:", 143, 62);
-      pdf.line(155, 63, pageWidth - margin, 63);
       pdf.setFontSize(7);
-      pdf.text("Write one answer on each line. Use the option letter for MC and matching; write True or False for T/F.", margin, 73);
+      pdf.text("Write one answer on each line. Use the option letter for MC and matching; write True or False for T/F.", margin, 12);
       if (pdf.getNumberOfPages() === 1 && exam.questions.some((question) => question.type === "matching")) {
         pdf.setFont("helvetica", "bold");
-        pdf.text("MATCHING CHOICES", margin, 82);
-        let choiceY = 88;
+        pdf.setFontSize(7);
+        pdf.text("Matching choices", margin, 20);
+        let choiceY = 25;
         createMatchingChoiceRows(exam.matchingChoices).forEach((choiceRow) => {
           choiceRow.entries.forEach((entry, entryIndex) => {
             const x = entryIndex === 0 ? margin : pageWidth / 2 + 2;
             pdf.setFont("helvetica", "bold");
+            pdf.setFontSize(6);
             pdf.text(`${entry.label}.`, x, choiceY);
             pdf.setFont("helvetica", "normal");
             entry.lines.forEach((line, lineIndex) => {
-              pdf.text(line, x + 7, choiceY + lineIndex * 3.5);
+              pdf.text(line, x + 6, choiceY + lineIndex * 2.5);
             });
           });
           choiceY += choiceRow.height;
@@ -717,36 +712,21 @@ export default function ExamBuilderPage() {
       const question = exam.questions[row.questionIndex];
       pdf.setTextColor(23, 44, 37);
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(9);
-      pdf.text(String(row.questionIndex + 1).padStart(2, "0"), margin + 1, row.y + 3);
-
-      if (question.type === "identification") {
-        pdf.setDrawColor(151, 166, 154);
-        pdf.line(margin + 38, row.y + 6, pageWidth - margin, row.y + 6);
-        return;
-      }
-
-      const answerPrompt = question.type === "multiple-choice"
-        ? "Option (A-D):"
-        : question.type === "true-false" ? "True / False:" : "Choice letter:";
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(8);
-      pdf.text(answerPrompt, margin + 27, row.y + 4);
-      pdf.setDrawColor(95, 119, 104);
-      pdf.line(margin + 59, row.y + 6, pageWidth - margin, row.y + 6);
+      pdf.setFontSize(7);
+      const columnX = row.column === 0 ? margin : pageWidth / 2 + 3;
+      pdf.text(String(row.questionIndex + 1), columnX, row.y + 3.8);
+      const itemTypeLabel = question.type === "multiple-choice" ? "MC"
+        : question.type === "true-false" ? "T/F"
+          : question.type === "matching" ? "MATCH" : "ID";
+      pdf.setTextColor(102, 118, 110);
+      pdf.setFontSize(5.5);
+      pdf.text(itemTypeLabel, columnX + 9, row.y + 3.8);
+      pdf.setDrawColor(151, 166, 154);
+      pdf.line(columnX + 25, row.y + 5.4, columnX + pageWidth / 2 - margin - 4, row.y + 5.4);
     });
 
-    const pageCount = layout.pageCount;
-    for (let pageIndex = 1; pageIndex <= pageCount; pageIndex += 1) {
-      pdf.setPage(pageIndex);
-      pdf.setTextColor(102, 118, 110);
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(8);
-      pdf.text(`Page ${pageIndex} of ${pageCount}`, pageWidth - margin, pageHeight - 8, { align: "right" });
-    }
-
     const slug = exam.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "exam";
-    pdf.save(`${slug}-answer-sheet-long-bond.pdf`);
+    pdf.save(`${slug}-answer-sheet.pdf`);
   }
 
   async function downloadAnswerKeyPdf(exam: ExamDraft) {

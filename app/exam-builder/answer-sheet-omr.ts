@@ -2,8 +2,9 @@ import type { ExamType } from "@/app/lib/exam-types";
 
 export const answerSheetPageWidth = 215.9;
 export const answerSheetPageHeight = 330.2;
-export const answerSheetStartY = 80;
+export const answerSheetStartY = 20;
 export const answerSheetBottomY = 302;
+export const answerSheetRowHeight = 7.5;
 export const answerSheetMarkers = [
   { x: 9, y: 56 },
   { x: 206.9, y: 56 },
@@ -21,6 +22,7 @@ export interface AnswerSheetRow {
   questionIndex: number;
   type: ExamType;
   page: number;
+  column: number;
   y: number;
   height: number;
   bubbles: AnswerBubble[];
@@ -46,13 +48,13 @@ export function createMatchingChoiceRows(choices: string[]): MatchingChoiceRow[]
     let line = "";
     choice.trim().split(/\s+/).forEach((word) => {
       let remaining = word;
-      while (remaining.length > 44) {
+      while (remaining.length > 54) {
         if (line) lines.push(line);
-        line = remaining.slice(0, 44);
-        remaining = remaining.slice(44);
+        line = remaining.slice(0, 54);
+        remaining = remaining.slice(54);
       }
       if (!remaining) return;
-      if (line && `${line} ${remaining}`.length > 44) {
+      if (line && `${line} ${remaining}`.length > 54) {
         lines.push(line);
         line = remaining;
       } else {
@@ -68,7 +70,7 @@ export function createMatchingChoiceRows(choices: string[]): MatchingChoiceRow[]
     const pair = entries.slice(index, index + 2);
     rows.push({
       entries: pair,
-      height: Math.max(...pair.map((entry) => entry.lines.length)) * 3.5 + 2,
+      height: Math.max(...pair.map((entry) => entry.lines.length)) * 2.5 + 2,
     });
   }
   return rows;
@@ -76,7 +78,7 @@ export function createMatchingChoiceRows(choices: string[]): MatchingChoiceRow[]
 
 export function matchingChoiceBlockHeight(choices: string[]) {
   const rows = createMatchingChoiceRows(choices);
-  return rows.length ? 11 + rows.reduce((total, row) => total + row.height, 0) : 0;
+  return rows.length ? 7 + rows.reduce((total, row) => total + row.height, 0) : 0;
 }
 
 export function createAnswerSheetLayout(
@@ -84,39 +86,54 @@ export function createAnswerSheetLayout(
   matchingChoices: string[],
 ): AnswerSheetLayout {
   const rows: AnswerSheetRow[] = [];
-  let page = 0;
   const hasMatchingQuestions = questions.some((question) => question.type === "matching");
-  let y = answerSheetStartY + (hasMatchingQuestions ? matchingChoiceBlockHeight(matchingChoices) : 0);
+  const firstPageStartY = answerSheetStartY + (hasMatchingQuestions ? matchingChoiceBlockHeight(matchingChoices) : 0);
+  let questionIndex = 0;
+  let page = 0;
 
-  questions.forEach((question, questionIndex) => {
-    const height = question.type === "matching" && matchingChoices.length > 11
-      ? 12 + Math.ceil((matchingChoices.length - 11) / 11) * 11
-      : 12;
-    if (y + height > answerSheetBottomY) {
-      page += 1;
-      y = answerSheetStartY;
+  while (questionIndex < questions.length || page === 0) {
+    const startY = page === 0 ? firstPageStartY : answerSheetStartY;
+    const rowCapacity = Math.max(1, Math.floor((answerSheetBottomY - startY) / answerSheetRowHeight));
+    const pageQuestionCount = Math.min(questions.length - questionIndex, rowCapacity * 2);
+    const firstColumnCount = Math.ceil(pageQuestionCount / 2);
+
+    for (let pageOffset = 0; pageOffset < pageQuestionCount; pageOffset += 1) {
+      const currentQuestionIndex = questionIndex + pageOffset;
+      const column = pageOffset < firstColumnCount ? 0 : 1;
+      const rowIndex = column === 0 ? pageOffset : pageOffset - firstColumnCount;
+      const question = questions[currentQuestionIndex];
+
+      let labels: string[] = [];
+      if (question.type === "multiple-choice") labels = ["A", "B", "C", "D"];
+      if (question.type === "true-false") labels = ["T", "F"];
+      if (question.type === "matching") labels = matchingChoices.map((_, index) => optionLabel(index));
+
+      const bubbles = labels.map((label, optionIndex) => {
+        const matchingLine = Math.floor(optionIndex / 11);
+        const matchingColumn = optionIndex % 11;
+        return {
+          label,
+          x: column * (answerSheetPageWidth / 2) + (question.type === "matching" ? 38 + matchingColumn * 5 : 32 + optionIndex * 12),
+          y: startY + rowIndex * answerSheetRowHeight + 5 + (question.type === "matching" ? matchingLine * 5 : 0),
+        };
+      });
+
+      rows.push({
+        questionIndex: currentQuestionIndex,
+        type: question.type,
+        page,
+        column,
+        y: startY + rowIndex * answerSheetRowHeight,
+        height: answerSheetRowHeight,
+        bubbles,
+      });
     }
 
-    let labels: string[] = [];
-    if (question.type === "multiple-choice") labels = ["A", "B", "C", "D"];
-    if (question.type === "true-false") labels = ["T", "F"];
-    if (question.type === "matching") labels = matchingChoices.map((_, index) => optionLabel(index));
+    questionIndex += pageQuestionCount;
+    page += 1;
+  }
 
-    const bubbles = labels.map((label, optionIndex) => {
-      const matchingLine = Math.floor(optionIndex / 11);
-      const matchingColumn = optionIndex % 11;
-      return {
-        label,
-        x: question.type === "matching" ? 58 + matchingColumn * 12.7 : 61 + optionIndex * 26,
-        y: y + 6 + (question.type === "matching" ? matchingLine * 11 : 0),
-      };
-    });
-
-    rows.push({ questionIndex, type: question.type, page, y, height, bubbles });
-    y += height;
-  });
-
-  return { rows, pageCount: page + 1 };
+  return { rows, pageCount: page };
 }
 
 export function pageIndexFromOcr(text: string, pageCount: number) {

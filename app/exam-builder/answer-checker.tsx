@@ -34,7 +34,7 @@ function parseResponseLines(text: string, fallbackQuestionIndexes?: number[]) {
   text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => {
     const match = line.match(/^\s*(\d{1,3})\s*[.)\]:-]?\s+(.+?)\s*$/);
     const content = (match ? match[2] : line)
-      .replace(/^(?:MC\s*A-D|T\s*\/\s*F|True\s*\/\s*False|Match(?:ing)?|ID|Answer)\s*:?\s*/i, "")
+      .replace(/^(?:MC\s*A-D|MC|T\s*\/\s*F|True\s*\/\s*False|MATCH(?:ING)?|ID|Answer)\s*:?\s*/i, "")
       .trim();
     if (!content || /^(?:MARKWISE|EXAM BUILDER|ANSWER SHEET|MATCHING CHOICES|STUDENT NAME|DATE|WRITE ONE ANSWER|PAGE\s+\d+)/i.test(content)) return;
     if (!match && /^[A-Z]\.\s+/.test(content)) return;
