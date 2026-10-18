@@ -19,13 +19,13 @@ MongoDB variables take precedence over the legacy MySQL (`MYSQL_URL`) and Neon/P
 
 ## Handwriting OCR
 
-Answer-sheet scans use Google Cloud Vision document text detection for handwriting recognition. Enable the Vision API, create an API key restricted to that API, and set the key as a server-side environment variable in `.env.local` and in your deployment:
+Answer-sheet scans locate printed question numbers, isolate each corresponding answer row, and use Google Cloud Vision document text detection for handwriting recognition. Enable the Vision API, create an API key restricted to that API, and set the key as a server-side environment variable in `.env.local` and in your deployment:
 
 ```env
 GOOGLE_CLOUD_VISION_API_KEY="your-server-side-api-key"
 ```
 
-Do not use a `NEXT_PUBLIC_` prefix. Scanned answer-sheet images are sent to Google Cloud Vision for recognition. If cloud OCR is not configured or unavailable, the app falls back to local Tesseract OCR and shows a warning; handwriting accuracy varies, so review responses before grading. Configure an API quota to control usage.
+Do not use a `NEXT_PUBLIC_` prefix. The full scan is sent to Google Cloud Vision to locate question numbers; isolated answer rows are sent for handwriting recognition. If cloud OCR is unavailable, the app falls back to local Tesseract OCR and shows a warning. Handwriting accuracy varies, so review responses before grading. Configure an API quota to control usage.
 
 ## Development
 

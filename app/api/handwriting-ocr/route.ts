@@ -98,6 +98,40 @@ export async function POST(request: Request) {
     ? firstResponse.fullTextAnnotation
     : null;
   const text = annotation && typeof annotation.text === "string" ? annotation.text.trim() : "";
+  const pages = annotation && Array.isArray(annotation.pages) ? annotation.pages : [];
+  const page = pages[0];
+  const width = isRecord(page) && typeof page.width === "number" ? page.width : 0;
+  const height = isRecord(page) && typeof page.height === "number" ? page.height : 0;
+  const words: { text: string; x0: number; y0: number; x1: number; y1: number }[] = [];
 
-  return Response.json({ text });
+  if (isRecord(page) && Array.isArray(page.blocks)) {
+    for (const block of page.blocks) {
+      if (!isRecord(block) || !Array.isArray(block.paragraphs)) continue;
+      for (const paragraph of block.paragraphs) {
+        if (!isRecord(paragraph) || !Array.isArray(paragraph.words)) continue;
+        for (const word of paragraph.words) {
+          if (!isRecord(word) || !Array.isArray(word.symbols) || !isRecord(word.boundingBox)) continue;
+          const vertices = Array.isArray(word.boundingBox.vertices) ? word.boundingBox.vertices : [];
+          const points = vertices.filter((vertex): vertex is Record<string, unknown> => isRecord(vertex));
+          if (points.length === 0) continue;
+          const xCoordinates = points.map((point) => typeof point.x === "number" ? point.x : 0);
+          const yCoordinates = points.map((point) => typeof point.y === "number" ? point.y : 0);
+          const wordText = word.symbols
+            .filter(isRecord)
+            .map((symbol) => typeof symbol.text === "string" ? symbol.text : "")
+            .join("");
+          if (!wordText) continue;
+          words.push({
+            text: wordText,
+            x0: Math.min(...xCoordinates),
+            y0: Math.min(...yCoordinates),
+            x1: Math.max(...xCoordinates),
+            y1: Math.max(...yCoordinates),
+          });
+        }
+      }
+    }
+  }
+
+  return Response.json({ text, width, height, words });
 }

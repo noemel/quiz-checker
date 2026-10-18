@@ -1,6 +1,6 @@
 'use client';
 
-import { createWorker } from "tesseract.js";
+import { createWorker, PSM } from "tesseract.js";
 import Image from "next/image";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { ExamQuestion, ExamType, SavedExam } from "@/app/lib/exam-types";
@@ -23,8 +23,239 @@ const typeLabels: Record<ExamType, string> = {
 
 const answerLetters = ["A", "B", "C", "D"];
 
+interface OcrWord {
+  text: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+interface AnswerRegion {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+interface AnswerCrop {
+  questionIndex: number;
+  type: ExamType;
+  region: AnswerRegion;
+}
+
+interface AnswerContactSheet {
+  file: File;
+  crops: AnswerCrop[];
+  scale: number;
+  padding: number;
+  cellHeight: number;
+}
+
+function isOcrWord(value: unknown): value is OcrWord {
+  if (typeof value !== "object" || value === null) return false;
+  const word = value as Record<string, unknown>;
+  return typeof word.text === "string"
+    && typeof word.x0 === "number"
+    && typeof word.y0 === "number"
+    && typeof word.x1 === "number"
+    && typeof word.y1 === "number";
+}
+
+async function recognizeWithCloudOcr(file: File) {
+  const formData = new FormData();
+  formData.append("image", file);
+  const response = await fetch("/api/handwriting-ocr", { method: "POST", body: formData });
+  const result: unknown = await response.json().catch(() => null);
+  const cloudResult = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const error = typeof cloudResult.error === "string"
+    ? cloudResult.error : "Cloud handwriting OCR returned an invalid response.";
+  if (!response.ok) throw new Error(error);
+  const words = Array.isArray(cloudResult.words) ? cloudResult.words.filter(isOcrWord) : [];
+  if (!words.length) throw new Error("No text positions were detected in the image.");
+  return {
+    text: typeof cloudResult.text === "string" ? cloudResult.text : "",
+    words,
+    width: typeof cloudResult.width === "number" ? cloudResult.width : 0,
+    height: typeof cloudResult.height === "number" ? cloudResult.height : 0,
+  };
+}
+
 function normalizeAnswer(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+function getOcrWords(blocks: {
+  paragraphs: {
+    lines: {
+      words: { text: string; bbox: { x0: number; y0: number; x1: number; y1: number } }[];
+    }[];
+  }[];
+}[] | null) {
+  return (blocks ?? []).flatMap((block) => block.paragraphs.flatMap((paragraph) =>
+    paragraph.lines.flatMap((line) => line.words.map((word) => ({
+      text: word.text,
+      x0: word.bbox.x0,
+      y0: word.bbox.y0,
+      x1: word.bbox.x1,
+      y1: word.bbox.y1,
+    }))),
+  ));
+}
+
+function getAnswerRegions(
+  words: OcrWord[],
+  width: number,
+  height: number,
+  layout: ReturnType<typeof createAnswerSheetLayout>,
+  pageIndex: number,
+) {
+  const rows = layout.rows.filter((row) => row.page === pageIndex);
+  const anchors = new Map<number, OcrWord>();
+  for (const row of rows) {
+    const itemNumber = String(row.questionIndex + 1);
+    const candidates = words.filter((word) => word.text.replace(/[^0-9]/g, "") === itemNumber);
+    const anchor = candidates.sort((a, b) => a.y0 - b.y0)[0];
+    if (anchor) anchors.set(row.questionIndex, anchor);
+  }
+
+  const rowsByColumn = [0, 1].map((column) => rows
+    .filter((row) => row.column === column)
+    .map((row) => anchors.get(row.questionIndex))
+    .filter((anchor): anchor is OcrWord => Boolean(anchor))
+    .sort((a, b) => (a.y0 + a.y1) / 2 - (b.y0 + b.y1) / 2));
+  const columnCenters = rowsByColumn.map((columnAnchors) => {
+    const centers = columnAnchors.map((anchor) => (anchor.x0 + anchor.x1) / 2).sort((a, b) => a - b);
+    return centers.length ? centers[Math.floor(centers.length / 2)] : null;
+  });
+  const columnBoundary = columnCenters[0] !== null && columnCenters[1] !== null
+    ? (columnCenters[0] + columnCenters[1]) / 2
+    : width / 2;
+  const columnWidths = [
+    columnBoundary,
+    columnCenters[1] !== null
+      ? Math.max(1, columnCenters[1] - columnBoundary)
+      : Math.max(1, width - columnBoundary),
+  ];
+  const medianRowHeight = rowsByColumn.map((columnAnchors) => {
+    const gaps = columnAnchors.slice(1).map((anchor, index) =>
+      (anchor.y0 + anchor.y1 - columnAnchors[index].y0 - columnAnchors[index].y1) / 2,
+    ).filter((gap) => gap > 0);
+    gaps.sort((a, b) => a - b);
+    return gaps[Math.floor(gaps.length / 2)] ?? (height * 7.5 / 330.2);
+  });
+
+  return new Map(rows.flatMap((row) => {
+    const anchor = anchors.get(row.questionIndex);
+    if (!anchor) return [];
+    const rowHeight = medianRowHeight[row.column];
+    const centerY = (anchor.y0 + anchor.y1) / 2;
+    const colWidth = columnWidths[row.column];
+    const answerLeft = Math.min(width - 1, Math.max(anchor.x1 + 2, anchor.x1 + colWidth * 0.08));
+    const columnRight = row.column === 0
+      ? columnBoundary - colWidth * 0.025
+      : Math.min(width - 1, (columnCenters[1] ?? columnBoundary) + colWidth * 2);
+    const typeLabels = row.type === "multiple-choice" ? ["MC"]
+      : row.type === "true-false" ? ["T/F", "TF"]
+        : row.type === "matching" ? ["MATCH", "MATCHING"] : ["ID"];
+    const label = words.find((word) => {
+      const normalized = word.text.toUpperCase().replace(/[^A-Z/]/g, "");
+      return typeLabels.includes(normalized)
+        && word.x0 > anchor.x1
+        && word.x0 < columnRight
+        && Math.abs((word.y0 + word.y1) / 2 - centerY) < rowHeight * 0.65;
+    });
+    const left = label
+      ? Math.max(answerLeft, label.x1 + colWidth * 0.015)
+      : answerLeft;
+    if (left >= columnRight) return [];
+    const answerWidth = row.type === "identification"
+      ? columnRight - left
+      : Math.min(columnRight - left, Math.max(48, colWidth * 0.24));
+    return [[row.questionIndex, {
+      left: Math.max(0, Math.floor(left)),
+      top: Math.max(0, Math.floor(centerY - rowHeight * 0.55)),
+      width: Math.max(1, Math.ceil(answerWidth)),
+      height: Math.max(1, Math.ceil(rowHeight * 1.1)),
+    }] as const];
+  }));
+}
+
+async function createAnswerContactSheet(file: File, crops: AnswerCrop[]): Promise<AnswerContactSheet> {
+  const scale = 3;
+  const padding = 12;
+  const cellHeight = Math.max(...crops.map((crop) => crop.region.height)) * scale + padding * 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(...crops.map((crop) => crop.region.width)) * scale + padding * 2;
+  canvas.height = crops.length * cellHeight;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("This browser could not prepare the answer rows for recognition.");
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const bitmap = await createImageBitmap(file);
+  try {
+    crops.forEach((crop, index) => {
+      const { left, top, width, height } = crop.region;
+      context.drawImage(
+        bitmap,
+        left,
+        top,
+        width,
+        height,
+        padding,
+        index * cellHeight + padding,
+        width * scale,
+        height * scale,
+      );
+    });
+  } finally {
+    bitmap.close();
+  }
+
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("The answer rows could not be prepared for recognition.");
+  return {
+    file: new File([blob], "answer-rows.png", { type: "image/png" }),
+    crops,
+    scale,
+    padding,
+    cellHeight,
+  };
+}
+
+function readContactSheetResponses(words: OcrWord[], contactSheet: AnswerContactSheet) {
+  const responses = new Map<number, string>();
+  contactSheet.crops.forEach((crop, index) => {
+    const top = index * contactSheet.cellHeight + contactSheet.padding;
+    const bottom = top + crop.region.height * contactSheet.scale;
+    const rowWords = words
+      .filter((word) => {
+        const center = (word.y0 + word.y1) / 2;
+        return center >= top && center <= bottom;
+      })
+      .sort((a, b) => a.x0 - b.x0);
+    const response = normalizeScannedResponse(crop.type, rowWords.map((word) => word.text).join(" "));
+    if (response) responses.set(crop.questionIndex, response);
+  });
+  return responses;
+}
+
+function getAnswerWhitelist(type: ExamType, matchingChoiceCount: number) {
+  if (type === "multiple-choice") return "ABCD";
+  if (type === "true-false") return "TRUEFALSE";
+  if (type === "matching") {
+    return Array.from({ length: Math.min(matchingChoiceCount, 26) }, (_, index) => String.fromCharCode(65 + index)).join("");
+  }
+  return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,'-";
+}
+
+function normalizeScannedResponse(type: ExamType, text: string) {
+  const value = text.toUpperCase().replace(/\s+/g, " ").trim();
+  if (type === "multiple-choice") return value.match(/[A-D]/g)?.join("/") ?? "";
+  if (type === "true-false") return value.match(/TRUE|FALSE|[TF]/)?.[0] ?? "";
+  if (type === "matching") return value.match(/[A-Z]/g)?.join("/") ?? "";
+  return value;
 }
 
 function parseResponseLines(text: string, fallbackQuestionIndexes?: number[]) {
@@ -252,64 +483,112 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
     setProgress(0);
     let recognizedText = "";
     let cloudOcrWarning = "";
+    let cloudOcrAvailable = false;
+    let words: OcrWord[] = [];
+    let imageWidth = 0;
+    let imageHeight = 0;
+    let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
     try {
       try {
         setProgress(10);
-        const formData = new FormData();
-        formData.append("image", photo);
-        const response = await fetch("/api/handwriting-ocr", { method: "POST", body: formData });
-        const result: unknown = await response.json().catch(() => null);
-        const cloudText = result && typeof result === "object" && "text" in result && typeof result.text === "string"
-          ? result.text
-          : "";
-        const cloudError = result && typeof result === "object" && "error" in result && typeof result.error === "string"
-          ? result.error
-          : "Cloud handwriting OCR returned an invalid response.";
-        if (!response.ok) throw new Error(cloudError);
-        if (!cloudText.trim()) throw new Error("No text was detected in the image.");
-        recognizedText = cloudText;
-        setProgress(100);
+        const cloudResult = await recognizeWithCloudOcr(photo);
+        recognizedText = cloudResult.text;
+        words = cloudResult.words;
+        imageWidth = cloudResult.width;
+        imageHeight = cloudResult.height;
+        cloudOcrAvailable = true;
+        setProgress(20);
       } catch (cloudError) {
         cloudOcrWarning = cloudError instanceof Error ? cloudError.message : "Cloud handwriting OCR failed.";
-        let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
-        try {
-          worker = await createWorker("eng", 1, {
-            logger: (message) => {
-              if (message.status === "recognizing text") setProgress(Math.round(message.progress * 100));
-            },
-          });
-          const { data } = await worker.recognize(photo);
-          recognizedText = data.text.trim();
-          if (!recognizedText) throw new Error("No written answers were recognized. Try a clearer, closer photo.");
-        } catch (localError) {
-          const localMessage = localError instanceof Error ? localError.message : "Local OCR failed.";
-          throw new Error(`Cloud handwriting OCR failed: ${cloudOcrWarning} Local OCR fallback failed: ${localMessage}`);
-        } finally {
-          await worker?.terminate();
-        }
+        worker = await createWorker("eng", 1, {
+          logger: (message) => {
+            if (message.status === "recognizing text") setProgress(Math.round(message.progress * 30));
+          },
+        });
+        await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+        const { data } = await worker.recognize(photo, {}, { blocks: true });
+        recognizedText = data.text.trim();
+        words = getOcrWords(data.blocks);
       }
+
+      const bitmap = await createImageBitmap(photo);
+      imageWidth ||= bitmap.width;
+      imageHeight ||= bitmap.height;
+      bitmap.close();
 
       const detectedPage = pageIndexFromOcr(recognizedText, answerSheetLayout.pageCount) ?? selectedPage;
       setSelectedPage(detectedPage);
+      const answerRegions = getAnswerRegions(words, imageWidth, imageHeight, answerSheetLayout, detectedPage);
+      if (answerRegions.size === 0) {
+        throw new Error("Could not locate the printed question numbers. Upload a clear photo showing the answer-sheet rows and try again.");
+      }
+
       const previousResponseAt = parseResponseLines(responseText);
-      const pageQuestionIndexes = answerSheetLayout.rows
-        .filter((row) => row.page === detectedPage)
-        .map((row) => row.questionIndex);
-      const scannedResponseAt = parseResponseLines(recognizedText, pageQuestionIndexes);
+      const pageRows = answerSheetLayout.rows.filter((answerRow) => answerRow.page === detectedPage);
+      const answerCrops = pageRows.flatMap((row) => {
+        const region = answerRegions.get(row.questionIndex);
+        return region ? [{ questionIndex: row.questionIndex, type: row.type, region }] : [];
+      });
+      const contactSheet = await createAnswerContactSheet(photo, answerCrops);
+      let scannedResponseAt = new Map<number, string>();
+      if (cloudOcrAvailable) {
+        try {
+          setProgress(60);
+          const cloudRows = await recognizeWithCloudOcr(contactSheet.file);
+          scannedResponseAt = readContactSheetResponses(cloudRows.words, contactSheet);
+          if (scannedResponseAt.size === 0) {
+            throw new Error("Cloud handwriting OCR did not recognize any isolated answers.");
+          }
+        } catch (cloudError) {
+          cloudOcrWarning = cloudError instanceof Error
+            ? cloudError.message : "Cloud handwriting OCR could not read the isolated answer rows.";
+        }
+      }
+
+      if (!cloudOcrAvailable || cloudOcrWarning) {
+        worker ??= await createWorker("eng", 1, {
+          logger: (message) => {
+            if (message.status === "recognizing text") {
+              setProgress(Math.min(99, 15 + Math.round(message.progress * 75)));
+            }
+          },
+        });
+        for (const [rowIndex, crop] of contactSheet.crops.entries()) {
+          await worker.setParameters({
+            tessedit_pageseg_mode: PSM.SINGLE_LINE,
+            tessedit_char_whitelist: getAnswerWhitelist(crop.type, exam.matchingChoices.length),
+          });
+          const region = {
+            left: contactSheet.padding,
+            top: rowIndex * contactSheet.cellHeight + contactSheet.padding,
+            width: crop.region.width * contactSheet.scale,
+            height: crop.region.height * contactSheet.scale,
+          };
+          const { data } = await worker.recognize(contactSheet.file, { rectangle: region });
+          const response = normalizeScannedResponse(crop.type, data.text);
+          if (response) scannedResponseAt.set(crop.questionIndex, response);
+          setProgress(Math.min(99, 15 + Math.round(((rowIndex + 1) / Math.max(1, contactSheet.crops.length)) * 75)));
+        }
+      }
+
       const combinedResponseText = exam.questions.map((question, index) => {
         let response = previousResponseAt(index);
-        if (answerSheetLayout.rows[index].page === detectedPage) response = scannedResponseAt(index) || response;
+        if (answerSheetLayout.rows[index].page === detectedPage) {
+          response = scannedResponseAt.get(index) || response;
+        }
         return response.trim() ? `${index + 1}. ${response.trim()}` : "";
       }).filter(Boolean).join("\n");
 
       setResponseText(combinedResponseText);
+      setProgress(100);
       setReadError(cloudOcrWarning
-        ? `Cloud handwriting OCR unavailable: ${cloudOcrWarning} Local OCR was used instead. Review the recognized responses before grading.`
-        : "Review every recognized response before grading; handwriting OCR can still make mistakes.");
+        ? `Cloud OCR unavailable: ${cloudOcrWarning} Local OCR read each answer row. Review responses before grading.`
+        : "Each answer was read from its own row. Review responses before grading.");
       setResults(null);
     } catch (error) {
       setReadError(error instanceof Error ? error.message : "The image could not be read.");
     } finally {
+      await worker?.terminate();
       setIsReading(false);
     }
   }
