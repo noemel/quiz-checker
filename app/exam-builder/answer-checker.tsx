@@ -111,72 +111,111 @@ function getAnswerRegions(
   pageIndex: number,
 ) {
   const rows = layout.rows.filter((row) => row.page === pageIndex);
-  const anchors = new Map<number, OcrWord>();
-  for (const row of rows) {
-    const itemNumber = String(row.questionIndex + 1);
-    const candidates = words.filter((word) => word.text.replace(/[^0-9]/g, "") === itemNumber);
-    const anchor = candidates.sort((a, b) => a.y0 - b.y0)[0];
-    if (anchor) anchors.set(row.questionIndex, anchor);
+  const numericWords = words.flatMap((word) => {
+    const digits = word.text.replace(/[^0-9]/g, "");
+    const itemNumber = Number(digits);
+    return digits && itemNumber > 0 && itemNumber <= layout.rows.length
+      ? [{ word, itemNumber, centerX: (word.x0 + word.x1) / 2 }]
+      : [];
+  });
+  const sortedCenters = numericWords.map((entry) => entry.centerX).sort((a, b) => a - b);
+  let columnBoundary = width / 2;
+  let largestGap = width * 0.08;
+  for (let index = 1; index < sortedCenters.length; index += 1) {
+    const gap = sortedCenters[index] - sortedCenters[index - 1];
+    if (gap > largestGap) {
+      largestGap = gap;
+      columnBoundary = (sortedCenters[index] + sortedCenters[index - 1]) / 2;
+    }
   }
 
-  const rowsByColumn = [0, 1].map((column) => rows
-    .filter((row) => row.column === column)
-    .map((row) => anchors.get(row.questionIndex))
-    .filter((anchor): anchor is OcrWord => Boolean(anchor))
-    .sort((a, b) => (a.y0 + a.y1) / 2 - (b.y0 + b.y1) / 2));
-  const columnCenters = rowsByColumn.map((columnAnchors) => {
-    const centers = columnAnchors.map((anchor) => (anchor.x0 + anchor.x1) / 2).sort((a, b) => a - b);
-    return centers.length ? centers[Math.floor(centers.length / 2)] : null;
-  });
-  const columnBoundary = columnCenters[0] !== null && columnCenters[1] !== null
-    ? (columnCenters[0] + columnCenters[1]) / 2
-    : width / 2;
-  const columnWidths = [
-    columnBoundary,
-    columnCenters[1] !== null
-      ? Math.max(1, columnCenters[1] - columnBoundary)
-      : Math.max(1, width - columnBoundary),
-  ];
-  const medianRowHeight = rowsByColumn.map((columnAnchors) => {
-    const gaps = columnAnchors.slice(1).map((anchor, index) =>
-      (anchor.y0 + anchor.y1 - columnAnchors[index].y0 - columnAnchors[index].y1) / 2,
-    ).filter((gap) => gap > 0);
-    gaps.sort((a, b) => a - b);
-    return gaps[Math.floor(gaps.length / 2)] ?? (height * 7.5 / 330.2);
+  const columnGap = Math.max(1, largestGap);
+  const rowModels = [0, 1].map((column) => {
+    const columnRows = rows.filter((row) => row.column === column);
+    const observations = columnRows.flatMap((row) => {
+      const itemNumber = row.questionIndex + 1;
+      const candidates = numericWords.filter((entry) =>
+        entry.itemNumber === itemNumber
+        && (column === 0 ? entry.centerX < columnBoundary : entry.centerX > columnBoundary)
+        && entry.word.x1 - entry.word.x0 <= Math.max(12, width * 0.045),
+      );
+      const anchor = candidates.sort((a, b) =>
+        (a.word.x1 - a.word.x0) - (b.word.x1 - b.word.x0),
+      )[0];
+      return anchor ? [{
+        itemNumber,
+        x: anchor.centerX,
+        y: (anchor.word.y0 + anchor.word.y1) / 2,
+        wordWidth: anchor.word.x1 - anchor.word.x0,
+        wordHeight: anchor.word.y1 - anchor.word.y0,
+      }] : [];
+    });
+    if (observations.length < 2) return null;
+
+    const slopes = observations.flatMap((first, index) =>
+      observations.slice(index + 1).flatMap((second) => {
+        const slope = (second.y - first.y) / (second.itemNumber - first.itemNumber);
+        return slope >= height * 0.006 && slope <= height * 0.15 ? [slope] : [];
+      }),
+    ).sort((a, b) => a - b);
+    const slope = slopes[Math.floor(slopes.length / 2)];
+    if (!slope) return null;
+
+    const intercepts = observations
+      .map((point) => point.y - slope * point.itemNumber)
+      .sort((a, b) => a - b);
+    const intercept = intercepts[Math.floor(intercepts.length / 2)];
+    const inliers = observations.filter((point) =>
+      Math.abs(point.y - (intercept + slope * point.itemNumber)) <= Math.max(slope * 0.4, height * 0.004),
+    );
+    if (inliers.length < 2) return null;
+
+    const averageItem = inliers.reduce((sum, point) => sum + point.itemNumber, 0) / inliers.length;
+    const averageX = inliers.reduce((sum, point) => sum + point.x, 0) / inliers.length;
+    const averageY = inliers.reduce((sum, point) => sum + point.y, 0) / inliers.length;
+    const itemVariance = inliers.reduce((sum, point) => sum + (point.itemNumber - averageItem) ** 2, 0);
+    const xSlope = itemVariance
+      ? inliers.reduce((sum, point) => sum + (point.itemNumber - averageItem) * (point.x - averageX), 0) / itemVariance
+      : 0;
+    const ySlope = itemVariance
+      ? inliers.reduce((sum, point) => sum + (point.itemNumber - averageItem) * (point.y - averageY), 0) / itemVariance
+      : slope;
+    const xIntercept = averageX - xSlope * averageItem;
+    const yIntercept = averageY - ySlope * averageItem;
+    const widths = inliers.map((point) => point.wordWidth).sort((a, b) => a - b);
+    const heights = inliers.map((point) => point.wordHeight).sort((a, b) => a - b);
+    const minItem = Math.min(...inliers.map((point) => point.itemNumber));
+    const maxItem = Math.max(...inliers.map((point) => point.itemNumber));
+
+    return {
+      xAt: (itemNumber: number) => xIntercept + xSlope * itemNumber,
+      yAt: (itemNumber: number) => yIntercept + ySlope * itemNumber,
+      rowHeight: heights[Math.floor(heights.length / 2)] * 1.15,
+      labelWidth: widths[Math.floor(widths.length / 2)],
+      minItem: Math.max(columnRows[0] ? columnRows[0].questionIndex + 1 : 1, minItem - 4),
+      maxItem: maxItem + 2,
+    };
   });
 
   return new Map(rows.flatMap((row) => {
-    const anchor = anchors.get(row.questionIndex);
-    if (!anchor) return [];
-    const rowHeight = medianRowHeight[row.column];
-    const centerY = (anchor.y0 + anchor.y1) / 2;
-    const colWidth = columnWidths[row.column];
-    const answerLeft = Math.min(width - 1, Math.max(anchor.x1 + 2, anchor.x1 + colWidth * 0.08));
-    const columnRight = row.column === 0
-      ? columnBoundary - colWidth * 0.025
-      : Math.min(width - 1, (columnCenters[1] ?? columnBoundary) + colWidth * 2);
-    const typeLabels = row.type === "multiple-choice" ? ["MC"]
-      : row.type === "true-false" ? ["T/F", "TF"]
-        : row.type === "matching" ? ["MATCH", "MATCHING"] : ["ID"];
-    const label = words.find((word) => {
-      const normalized = word.text.toUpperCase().replace(/[^A-Z/]/g, "");
-      return typeLabels.includes(normalized)
-        && word.x0 > anchor.x1
-        && word.x0 < columnRight
-        && Math.abs((word.y0 + word.y1) / 2 - centerY) < rowHeight * 0.65;
-    });
-    const left = label
-      ? Math.max(answerLeft, label.x1 + colWidth * 0.015)
-      : answerLeft;
-    if (left >= columnRight) return [];
+    const model = rowModels[row.column];
+    const itemNumber = row.questionIndex + 1;
+    if (!model || itemNumber < model.minItem || itemNumber > model.maxItem) return [];
+    const centerY = model.yAt(itemNumber);
+    if (centerY < height * 0.04 || centerY > height * 0.98) return [];
+    const rowHeight = Math.max(model.rowHeight, height * 0.015);
+    const numberCenterX = model.xAt(itemNumber);
+    const left = numberCenterX + model.labelWidth / 2 + columnGap * 0.06;
+    if (left >= width) return [];
     const answerWidth = row.type === "identification"
-      ? columnRight - left
-      : Math.min(columnRight - left, Math.max(48, colWidth * 0.24));
+      ? width - left - width * 0.03
+      : Math.max(columnGap * 0.2, rowHeight * 2.5);
+    const answerHeight = Math.max(rowHeight, height * 0.02);
     return [[row.questionIndex, {
       left: Math.max(0, Math.floor(left)),
-      top: Math.max(0, Math.floor(centerY - rowHeight * 0.55)),
-      width: Math.max(1, Math.ceil(answerWidth)),
-      height: Math.max(1, Math.ceil(rowHeight * 1.1)),
+      top: Math.max(0, Math.floor(centerY - answerHeight * 0.5)),
+      width: Math.max(1, Math.min(width - left, Math.ceil(answerWidth))),
+      height: Math.max(1, Math.ceil(answerHeight)),
     }] as const];
   }));
 }
@@ -208,6 +247,34 @@ async function createAnswerContactSheet(file: File, crops: AnswerCrop[]): Promis
         width * scale,
         height * scale,
       );
+      if (crop.type !== "identification") {
+        const image = context.getImageData(
+          padding,
+          index * cellHeight + padding,
+          width * scale,
+          height * scale,
+        );
+        for (let y = 0; y < image.height; y += 1) {
+          let darkPixels = 0;
+          for (let x = 0; x < image.width; x += 1) {
+            const offset = (y * image.width + x) * 4;
+            if ((image.data[offset] + image.data[offset + 1] + image.data[offset + 2]) / 3 < 150) {
+              darkPixels += 1;
+            }
+          }
+          if (darkPixels < image.width * 0.55) continue;
+          for (let lineY = Math.max(0, y - 1); lineY <= Math.min(image.height - 1, y + 1); lineY += 1) {
+            for (let x = 0; x < image.width; x += 1) {
+              const offset = (lineY * image.width + x) * 4;
+              image.data[offset] = 255;
+              image.data[offset + 1] = 255;
+              image.data[offset + 2] = 255;
+              image.data[offset + 3] = 255;
+            }
+          }
+        }
+        context.putImageData(image, padding, index * cellHeight + padding);
+      }
     });
   } finally {
     bitmap.close();
@@ -252,9 +319,9 @@ function getAnswerWhitelist(type: ExamType, matchingChoiceCount: number) {
 
 function normalizeScannedResponse(type: ExamType, text: string) {
   const value = text.toUpperCase().replace(/\s+/g, " ").trim();
-  if (type === "multiple-choice") return value.match(/[A-D]/g)?.join("/") ?? "";
+  if (type === "multiple-choice") return value.match(/[A-D]/)?.[0] ?? "";
   if (type === "true-false") return value.match(/TRUE|FALSE|[TF]/)?.[0] ?? "";
-  if (type === "matching") return value.match(/[A-Z]/g)?.join("/") ?? "";
+  if (type === "matching") return value.match(/[A-Z]/)?.[0] ?? "";
   return value;
 }
 
@@ -545,7 +612,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
         }
       }
 
-      if (!cloudOcrAvailable || cloudOcrWarning) {
+      if (!cloudOcrAvailable || cloudOcrWarning || scannedResponseAt.size < contactSheet.crops.length) {
         worker ??= await createWorker("eng", 1, {
           logger: (message) => {
             if (message.status === "recognizing text") {
@@ -554,8 +621,9 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
           },
         });
         for (const [rowIndex, crop] of contactSheet.crops.entries()) {
+          if (scannedResponseAt.has(crop.questionIndex)) continue;
           await worker.setParameters({
-            tessedit_pageseg_mode: PSM.SINGLE_LINE,
+            tessedit_pageseg_mode: crop.type === "identification" ? PSM.SINGLE_LINE : PSM.SINGLE_CHAR,
             tessedit_char_whitelist: getAnswerWhitelist(crop.type, exam.matchingChoices.length),
           });
           const region = {
@@ -565,7 +633,12 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
             height: crop.region.height * contactSheet.scale,
           };
           const { data } = await worker.recognize(contactSheet.file, { rectangle: region });
-          const response = normalizeScannedResponse(crop.type, data.text);
+          let response = normalizeScannedResponse(crop.type, data.text);
+          if (!response && crop.type !== "identification") {
+            await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_WORD });
+            const fallback = await worker.recognize(contactSheet.file, { rectangle: region });
+            response = normalizeScannedResponse(crop.type, fallback.data.text);
+          }
           if (response) scannedResponseAt.set(crop.questionIndex, response);
           setProgress(Math.min(99, 15 + Math.round(((rowIndex + 1) / Math.max(1, contactSheet.crops.length)) * 75)));
         }
@@ -582,8 +655,10 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
       setResponseText(combinedResponseText);
       setProgress(100);
       setReadError(cloudOcrWarning
-        ? `Cloud OCR unavailable: ${cloudOcrWarning} Local OCR read each answer row. Review responses before grading.`
-        : "Each answer was read from its own row. Review responses before grading.");
+        ? `Cloud OCR unavailable: ${cloudOcrWarning} Local OCR recognized ${scannedResponseAt.size} of ${contactSheet.crops.length} answer rows. Review the scan and fill in any missed answers.`
+        : scannedResponseAt.size < contactSheet.crops.length
+          ? `Recognized ${scannedResponseAt.size} of ${contactSheet.crops.length} visible answer rows. Review the scan and fill in any missed answers.`
+          : "Each answer was read from its own row. Review responses before grading.");
       setResults(null);
     } catch (error) {
       setReadError(error instanceof Error ? error.message : "The image could not be read.");
