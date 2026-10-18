@@ -250,22 +250,52 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
     setIsReading(true);
     setReadError("");
     setProgress(0);
-    let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
+    let recognizedText = "";
+    let cloudOcrWarning = "";
     try {
-      worker = await createWorker("eng", 1, {
-        logger: (message) => {
-          if (message.status === "recognizing text") setProgress(Math.round(message.progress * 100));
-        },
-      });
-      const { data } = await worker.recognize(photo);
-      const detectedPage = pageIndexFromOcr(data.text, answerSheetLayout.pageCount) ?? selectedPage;
+      try {
+        setProgress(10);
+        const formData = new FormData();
+        formData.append("image", photo);
+        const response = await fetch("/api/handwriting-ocr", { method: "POST", body: formData });
+        const result: unknown = await response.json().catch(() => null);
+        const cloudText = result && typeof result === "object" && "text" in result && typeof result.text === "string"
+          ? result.text
+          : "";
+        const cloudError = result && typeof result === "object" && "error" in result && typeof result.error === "string"
+          ? result.error
+          : "Cloud handwriting OCR returned an invalid response.";
+        if (!response.ok) throw new Error(cloudError);
+        if (!cloudText.trim()) throw new Error("No text was detected in the image.");
+        recognizedText = cloudText;
+        setProgress(100);
+      } catch (cloudError) {
+        cloudOcrWarning = cloudError instanceof Error ? cloudError.message : "Cloud handwriting OCR failed.";
+        let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
+        try {
+          worker = await createWorker("eng", 1, {
+            logger: (message) => {
+              if (message.status === "recognizing text") setProgress(Math.round(message.progress * 100));
+            },
+          });
+          const { data } = await worker.recognize(photo);
+          recognizedText = data.text.trim();
+          if (!recognizedText) throw new Error("No written answers were recognized. Try a clearer, closer photo.");
+        } catch (localError) {
+          const localMessage = localError instanceof Error ? localError.message : "Local OCR failed.";
+          throw new Error(`Cloud handwriting OCR failed: ${cloudOcrWarning} Local OCR fallback failed: ${localMessage}`);
+        } finally {
+          await worker?.terminate();
+        }
+      }
+
+      const detectedPage = pageIndexFromOcr(recognizedText, answerSheetLayout.pageCount) ?? selectedPage;
       setSelectedPage(detectedPage);
-      if (!data.text.trim()) throw new Error("No written answers were recognized. Try a clearer, closer photo.");
       const previousResponseAt = parseResponseLines(responseText);
       const pageQuestionIndexes = answerSheetLayout.rows
         .filter((row) => row.page === detectedPage)
         .map((row) => row.questionIndex);
-      const scannedResponseAt = parseResponseLines(data.text, pageQuestionIndexes);
+      const scannedResponseAt = parseResponseLines(recognizedText, pageQuestionIndexes);
       const combinedResponseText = exam.questions.map((question, index) => {
         let response = previousResponseAt(index);
         if (answerSheetLayout.rows[index].page === detectedPage) response = scannedResponseAt(index) || response;
@@ -273,12 +303,13 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
       }).filter(Boolean).join("\n");
 
       setResponseText(combinedResponseText);
-      setReadError("OCR can misread handwriting. Review the recognized responses before grading.");
+      setReadError(cloudOcrWarning
+        ? `Cloud handwriting OCR unavailable: ${cloudOcrWarning} Local OCR was used instead. Review the recognized responses before grading.`
+        : "Review every recognized response before grading; handwriting OCR can still make mistakes.");
       setResults(null);
     } catch (error) {
       setReadError(error instanceof Error ? error.message : "The image could not be read.");
     } finally {
-      await worker?.terminate();
       setIsReading(false);
     }
   }
@@ -322,7 +353,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
         <div className="answer-check-content">
           <div className="answer-capture-panel">
             <h3>Student response</h3>
-            <p>Scan one page of this exam&apos;s answer-sheet PDF at a time and review the written responses before grading.</p>
+            <p>Scan one page of this exam&apos;s answer-sheet PDF at a time. When configured, images are sent to Google Cloud Vision for handwriting recognition; review all responses before grading.</p>
             <div className={`answer-camera-stage${cameraActive ? " is-live" : ""}${cameraExpanded ? " camera-expanded" : ""}`}>
               <video
                 ref={videoRef}
