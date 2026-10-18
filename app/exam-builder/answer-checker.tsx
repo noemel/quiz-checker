@@ -52,6 +52,12 @@ interface AnswerContactSheet {
   cellHeight: number;
 }
 
+interface VisualAnswer {
+  questionNumber: number;
+  answer: string;
+  confidence: "high" | "medium" | "low";
+}
+
 function isOcrWord(value: unknown): value is OcrWord {
   if (typeof value !== "object" || value === null) return false;
   const word = value as Record<string, unknown>;
@@ -79,6 +85,33 @@ async function recognizeWithCloudOcr(file: File) {
     width: typeof cloudResult.width === "number" ? cloudResult.width : 0,
     height: typeof cloudResult.height === "number" ? cloudResult.height : 0,
   };
+}
+
+async function transcribeAnswerSheetVisually(file: File, items: { questionNumber: number; answerType: ExamType }[]) {
+  const formData = new FormData();
+  formData.append("image", file);
+  formData.append("items", JSON.stringify(items));
+  const response = await fetch("/api/answer-sheet-transcription", { method: "POST", body: formData });
+  const result: unknown = await response.json().catch(() => null);
+  const transcription = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const error = typeof transcription.error === "string"
+    ? transcription.error : "Gemini visual transcription returned an invalid response.";
+  if (!response.ok) throw new Error(error);
+  if (!Array.isArray(transcription.answers)) {
+    throw new Error("Gemini returned an unexpected answer format.");
+  }
+  return transcription.answers.flatMap((value): VisualAnswer[] => {
+    if (!value || typeof value !== "object") return [];
+    const answer = value as Record<string, unknown>;
+    if (typeof answer.questionNumber !== "number"
+      || typeof answer.answer !== "string"
+      || (answer.confidence !== "high" && answer.confidence !== "medium" && answer.confidence !== "low")) return [];
+    return [{
+      questionNumber: answer.questionNumber,
+      answer: answer.answer,
+      confidence: answer.confidence,
+    }];
+  });
 }
 
 function normalizeAnswer(value: string) {
@@ -359,36 +392,6 @@ function getExpectedAnswer(question: ExamQuestion, exam: SavedExam) {
   return question.correctAnswer;
 }
 
-function getRecognizedLabel(question: ExamQuestion, exam: SavedExam, response: string) {
-  const value = response.trim().toUpperCase();
-  if (!value) return "No answer recognized";
-  const selected = value.split("/").filter(Boolean);
-
-  if (question.type === "multiple-choice") {
-    const labels = selected.map((label) => {
-      const choice = question.choices[answerLetters.indexOf(label)];
-      return choice ? `${label}. ${choice}` : label;
-    });
-    return labels.length > 1 ? `Multiple marks: ${labels.join("; ")}` : labels[0] ?? response;
-  }
-
-  if (question.type === "true-false") {
-    const labels = selected.map((label) => label === "T" ? "True" : label === "F" ? "False" : label);
-    return labels.length > 1 ? `Multiple marks: ${labels.join("; ")}` : labels[0] ?? response;
-  }
-
-  if (question.type === "matching") {
-    const labels = selected.map((label) => {
-      const optionIndex = label.charCodeAt(0) - 65;
-      const choice = exam.matchingChoices[optionIndex];
-      return choice ? `${label}. ${choice}` : label;
-    });
-    return labels.length > 1 ? `Multiple marks: ${labels.join("; ")}` : labels[0] ?? response;
-  }
-
-  return response;
-}
-
 function matchesAnswer(question: ExamQuestion, exam: SavedExam, response: string) {
   const normalizedResponse = normalizeAnswer(response);
   const normalizedExpected = normalizeAnswer(question.correctAnswer);
@@ -445,12 +448,19 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
   const [cameraError, setCameraError] = useState("");
   const [readError, setReadError] = useState("");
   const [isReading, setIsReading] = useState(false);
+  const [isVisuallyTranscribing, setIsVisuallyTranscribing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<AnswerCheckRow[] | null>(null);
+  const [answerImportMessage, setAnswerImportMessage] = useState("");
+  const [visualTranscriptionMessage, setVisualTranscriptionMessage] = useState("");
+  const [visualTranscriptionError, setVisualTranscriptionError] = useState(false);
+  const [manualEntryMessage, setManualEntryMessage] = useState("");
   const answerSheetLayout = createAnswerSheetLayout(exam.questions, exam.matchingChoices);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const uploadRef = useRef<HTMLInputElement | null>(null);
+  const answerImportRef = useRef<HTMLInputElement | null>(null);
+  const firstBlankAnswerRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -465,6 +475,10 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
     setPreviewUrl(URL.createObjectURL(file));
     setResults(null);
     setReadError("");
+    setAnswerImportMessage("");
+    setVisualTranscriptionMessage("");
+    setVisualTranscriptionError(false);
+    setManualEntryMessage("");
     setProgress(0);
   }
 
@@ -481,6 +495,80 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
       setReadError("Choose an image of the answer sheet.");
     }
     input.value = "";
+  }
+
+  async function handleAnswerImport(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    try {
+      const importedResponseAt = parseResponseLines(await file.text());
+      const importedResponses = exam.questions.map((_, index) => importedResponseAt(index));
+      const importedCount = importedResponses.filter((response) => response.trim()).length;
+      if (!importedCount) {
+        throw new Error("No answers were found. Use one answer per line, optionally numbered (for example, 1. B).");
+      }
+
+      setResponseText(importedResponses
+        .map((response, index) => response.trim() ? `${index + 1}. ${response.trim()}` : "")
+        .filter(Boolean)
+        .join("\n"));
+      setResults(null);
+      setAnswerImportMessage(`Imported ${importedCount} answers into ${exam.questions.length} configured item slots. Review them before grading.`);
+    } catch (error) {
+      setAnswerImportMessage(error instanceof Error ? error.message : "The answer file could not be imported.");
+    } finally {
+      input.value = "";
+    }
+  }
+
+  async function handleVisualTranscription() {
+    if (!photo) return;
+    setIsReading(true);
+    setIsVisuallyTranscribing(true);
+    setReadError("");
+    setAnswerImportMessage("");
+    setVisualTranscriptionMessage("");
+    setVisualTranscriptionError(false);
+
+    try {
+      const pageRows = answerSheetLayout.rows.filter((row) => row.page === selectedPage);
+      if (!pageRows.length) throw new Error(`No answer rows were found for page ${selectedPage + 1}.`);
+      const transcribedAnswers = await transcribeAnswerSheetVisually(photo, pageRows.map((row) => ({
+        questionNumber: row.questionIndex + 1,
+        answerType: row.type,
+      })));
+      if (!transcribedAnswers.length) {
+        throw new Error("Gemini did not return any usable answers. Try again or enter them manually.");
+      }
+
+      const answersByNumber = new Map(
+        transcribedAnswers.map((answer) => [answer.questionNumber, answer]),
+      );
+      const previousResponseAt = parseResponseLines(responseText);
+      const pageQuestionIndexes = new Set(pageRows.map((row) => row.questionIndex));
+      const updatedResponseText = exam.questions.map((_, index) => {
+        const previousAnswer = previousResponseAt(index);
+        const visualAnswer = pageQuestionIndexes.has(index) ? answersByNumber.get(index + 1) : undefined;
+        const answer = visualAnswer?.answer.trim() ? visualAnswer.answer.trim() : previousAnswer;
+        return answer.trim() ? `${index + 1}. ${answer}` : "";
+      }).filter(Boolean).join("\n");
+      setResponseText(updatedResponseText);
+      setResults(null);
+
+      const readCount = transcribedAnswers.filter((answer) => answer.answer.trim()).length;
+      const uncertainCount = transcribedAnswers.filter((answer) => answer.answer.trim() && answer.confidence !== "high").length;
+      setVisualTranscriptionMessage(
+        `Gemini visually transcribed ${readCount} of ${pageRows.length} answers on page ${selectedPage + 1}${uncertainCount ? `; ${uncertainCount} marked as uncertain` : ""}. Review the numbered slots and fill in any blanks before grading.`,
+      );
+    } catch (error) {
+      setVisualTranscriptionMessage(error instanceof Error ? error.message : "Gemini visual transcription failed.");
+      setVisualTranscriptionError(true);
+    } finally {
+      setIsVisuallyTranscribing(false);
+      setIsReading(false);
+    }
   }
 
   async function startCamera() {
@@ -672,17 +760,8 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
   const unansweredCount = results?.filter((result) => result.status === "unanswered").length ?? 0;
   const recognizedResponseAt = parseResponseLines(responseText);
   const hasRecognizedResponses = responseText.trim().length > 0;
-  const previewRows = exam.questions.map((question, index) => {
-    const response = recognizedResponseAt(index);
-    return {
-      number: index + 1,
-      type: typeLabels[question.type],
-      label: getRecognizedLabel(question, exam, response),
-      hasMark: Boolean(response.trim()),
-      multipleMarks: response.includes("/"),
-    };
-  });
-  const detectedCount = previewRows.filter((row) => row.hasMark).length;
+  const responseCount = exam.questions.filter((_, index) => recognizedResponseAt(index).trim()).length;
+  const firstBlankIndex = exam.questions.findIndex((_, index) => !recognizedResponseAt(index).trim());
 
   return (
     <div className="answer-check-backdrop" role="presentation" onMouseDown={(event) => {
@@ -707,7 +786,7 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
         <div className="answer-check-content">
           <div className="answer-capture-panel">
             <h3>Student response</h3>
-            <p>Scan one page of this exam&apos;s answer-sheet PDF at a time. When configured, images are sent to Google Cloud Vision for handwriting recognition; review all responses before grading.</p>
+            <p>Scan one page of this exam&apos;s answer-sheet PDF at a time. Choose OCR or Gemini visual transcription; either method can make mistakes, so review all responses before grading.</p>
             <div className={`answer-camera-stage${cameraActive ? " is-live" : ""}${cameraExpanded ? " camera-expanded" : ""}`}>
               <video
                 ref={videoRef}
@@ -754,53 +833,100 @@ export default function AnswerChecker({ exam, onClose }: { exam: SavedExam; onCl
               </label>
             )}
             {photo && !cameraActive && (
-              <button className="answer-read-button" type="button" onClick={() => void readPhoto()} disabled={isReading}>
-                {isReading ? `Reading image... ${progress}%` : "Read answer sheet and OCR"}
-              </button>
+              <>
+                <button className="answer-visual-button" type="button" onClick={() => void handleVisualTranscription()} disabled={isReading}>
+                  {isVisuallyTranscribing ? "Transcribing visually with Gemini..." : "Transcribe answers visually with Gemini"}
+                </button>
+                <button className="answer-read-button" type="button" onClick={() => {
+                  setManualEntryMessage("");
+                  void readPhoto();
+                }} disabled={isReading}>
+                  {isReading ? `Reading image... ${progress}%` : "Read answer sheet and OCR"}
+                </button>
+                <div className="answer-manual-actions">
+                  <button className="builder-secondary-button" type="button" onClick={() => {
+                    setManualEntryMessage("Manual entry selected. Read the uploaded sheet and fill in the numbered answer slots; no OCR is used.");
+                    firstBlankAnswerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    firstBlankAnswerRef.current?.focus({ preventScroll: true });
+                  }}>
+                    Skip OCR — enter answers manually
+                  </button>
+                  {previewUrl && (
+                    <a className="answer-image-reference" href={previewUrl} target="_blank" rel="noreferrer">
+                      Open image in new tab
+                    </a>
+                  )}
+                </div>
+              </>
+            )}
+            {visualTranscriptionMessage && (
+              <p className={`answer-visual-message${visualTranscriptionError ? " has-error" : ""}`} role={visualTranscriptionError ? "alert" : "status"}>
+                {visualTranscriptionMessage}
+              </p>
             )}
             {readError && <p className="field-error" role="alert">{readError}</p>}
+            {manualEntryMessage && <p className="answer-manual-message" role="status">{manualEntryMessage}</p>}
           </div>
 
           <div className="answer-response-panel">
-            <label className="builder-field" htmlFor="recognized-answers">
-              <span>RESPONSES / MANUAL CORRECTIONS</span>
-              <textarea
-                id="recognized-answers"
-                className="builder-textarea recognized-answers"
-                value={responseText}
-                onChange={(event) => {
-                  setResponseText(event.target.value);
-                  setResults(null);
-                }}
-                placeholder={"Enter one answer per line, for example:\n1. B\n2. True\n3. Water"}
+            <header className="answer-response-heading">
+              <div>
+                <h3>Student answers</h3>
+                <p>{responseCount} of {exam.questions.length} configured items filled</p>
+              </div>
+              <button className="builder-secondary-button" type="button" onClick={() => answerImportRef.current?.click()}>
+                Import answers
+              </button>
+              <input
+                ref={answerImportRef}
+                className="file-input"
+                type="file"
+                accept=".txt,text/plain"
+                onChange={(event) => void handleAnswerImport(event)}
+                aria-label="Import answers from a text file"
               />
-            </label>
-            <p className="answer-check-note">The sheet is reviewed for written responses and OCR-based identification; confirm each answer before grading.</p>
-            {hasRecognizedResponses && (
-              <section className="recognized-preview" aria-live="polite">
-                <header className="recognized-preview-heading">
-                  <div>
-                    <h3>Scan preview</h3>
-                    <p>{detectedCount} of {exam.questions.length} responses detected</p>
+            </header>
+            <p className="answer-check-note">The item count comes from this saved exam. Import a text file with one answer per line, optionally numbered (such as “1. B”), or scan an answer-sheet image. Edit any answer below before grading.</p>
+            {answerImportMessage && <p className="answer-import-message" role="status">{answerImportMessage}</p>}
+            <div className="answer-entry-list">
+              {exam.questions.map((question, index) => {
+                const response = recognizedResponseAt(index);
+                const inputId = `student-answer-${index + 1}`;
+                return (
+                  <div className={`answer-entry-row${response.trim() ? " is-filled" : ""}`} key={inputId}>
+                    <label className="answer-entry-label" htmlFor={inputId}>
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      <small>{typeLabels[question.type]}</small>
+                    </label>
+                    <input
+                      ref={index === firstBlankIndex ? firstBlankAnswerRef : undefined}
+                      id={inputId}
+                      className="builder-input answer-entry-input"
+                      type="text"
+                      value={response}
+                      placeholder={question.type === "identification" ? "Type written answer" : "Enter answer"}
+                      onChange={(event) => {
+                        const updatedResponses = exam.questions.map((_, itemIndex) => recognizedResponseAt(itemIndex));
+                        updatedResponses[index] = event.target.value;
+                        setResponseText(updatedResponses
+                          .map((answer, itemIndex) => answer.trim() ? `${itemIndex + 1}. ${answer.trim()}` : "")
+                          .filter(Boolean)
+                          .join("\n"));
+                        setResults(null);
+                        setAnswerImportMessage("");
+                        setManualEntryMessage("");
+                      }}
+                    />
+                    <span className="answer-entry-status">{response.trim() ? "Filled" : "Blank"}</span>
                   </div>
-                </header>
-                <div className="recognized-preview-table">
-                  <div className="recognized-preview-row recognized-preview-head"><span>ITEM</span><span>DETECTED RESPONSE</span><span>SCAN</span></div>
-                  {previewRows.map((row) => (
-                    <div className="recognized-preview-row" key={row.number}>
-                      <span>{String(row.number).padStart(2, "0")} · {row.type}</span>
-                      <span>{row.label}</span>
-                      <span className={`recognized-preview-status${row.multipleMarks ? " needs-review" : ""}`}>
-                        {row.multipleMarks ? "Multiple" : row.hasMark ? "Detected" : "Blank"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
+                );
+              })}
+            </div>
             <button className="text-action text-danger" type="button" onClick={() => {
               setResponseText("");
               setResults(null);
+              setAnswerImportMessage("");
+              setManualEntryMessage("");
             }}>Clear responses</button>
             <button className="builder-primary-button answer-grade-button" type="button" onClick={() => setResults(createResults(exam, responseText))} disabled={!hasRecognizedResponses}>
               Check preview against answer key <span aria-hidden="true">↗</span>

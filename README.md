@@ -17,15 +17,19 @@ The MongoDB server must allow connections from Vercel. Configure Atlas Network A
 
 MongoDB variables take precedence over the legacy MySQL (`MYSQL_URL`) and Neon/Postgres (`DATABASE_URL`) settings. Existing records in another database are not copied automatically; this app will read and write records in MongoDB after switching.
 
-## Handwriting OCR
+## Answer-sheet recognition
 
-Answer-sheet scans locate printed question numbers, isolate each corresponding answer row, and use Google Cloud Vision document text detection for handwriting recognition. Enable the Vision API, create an API key restricted to that API, and set the key as a server-side environment variable in `.env.local` and in your deployment:
+The answer checker offers two image-reading options:
 
 ```env
 GOOGLE_CLOUD_VISION_API_KEY="your-server-side-api-key"
+GEMINI_API_KEY="your-server-side-api-key"
 ```
 
-Do not use a `NEXT_PUBLIC_` prefix. The full scan is sent to Google Cloud Vision to locate question numbers; isolated answer rows are sent for handwriting recognition. If cloud OCR is unavailable, the app falls back to local Tesseract OCR and shows a warning. Handwriting accuracy varies, so review responses before grading. Configure an API quota to control usage.
+- **Read answer sheet and OCR** uses Google Cloud Vision to locate printed item numbers and recognize isolated answer rows. If Vision is unavailable, it falls back to local Tesseract OCR.
+- **Transcribe answers visually with Gemini** sends the original image and the selected page's item numbers to Gemini 2.5 Flash. Gemini inspects the image visually and returns answers by item number; it does not grade them.
+
+Set the relevant API key only as a server-side environment variable in `.env.local` and your deployment settings. Do not use a `NEXT_PUBLIC_` prefix. The visual-transcription option requires `GEMINI_API_KEY`; the OCR option requires `GOOGLE_CLOUD_VISION_API_KEY` for cloud OCR. Uploaded images are sent to the selected Google service. Usage may incur charges and is subject to provider quotas and data policies. Review every answer before grading; uncertain handwriting may still be misread.
 
 ## Development
 

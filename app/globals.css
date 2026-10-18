@@ -2143,6 +2143,29 @@ button {
   padding: 0 12px;
 }
 
+.answer-visual-button {
+  background: #f4f8f4;
+  border: 1px solid #aabdaf;
+  border-radius: 3px;
+  color: #174f3e;
+  display: block;
+  font-size: 10px;
+  font-weight: 650;
+  margin-top: 10px;
+  min-height: 35px;
+  padding: 0 12px;
+  width: 100%;
+}
+
+.answer-visual-button:hover:not(:disabled) {
+  background: #e8f1e9;
+}
+
+.answer-visual-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .answer-read-button:hover:not(:disabled) {
   background: #104e3d;
 }
@@ -2152,9 +2175,50 @@ button {
   opacity: 0.6;
 }
 
-.recognized-answers {
-  min-height: 265px;
-  white-space: pre-wrap;
+.answer-manual-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+
+.answer-manual-actions .builder-secondary-button {
+  min-height: 32px;
+}
+
+.answer-image-reference {
+  color: #17634a;
+  font-size: 9px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.answer-manual-message {
+  background: #f2f6f2;
+  border-left: 2px solid #21734f;
+  color: #405b4c;
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 8px 0;
+  padding: 8px 10px;
+}
+
+.answer-visual-message {
+  background: #f2f6f2;
+  border-left: 2px solid #21734f;
+  color: #405b4c;
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 8px 0;
+  padding: 8px 10px;
+}
+
+.answer-visual-message.has-error {
+  background: #fff5f2;
+  border-left-color: #b64130;
+  color: #873427;
 }
 
 .answer-check-note {
@@ -2164,74 +2228,84 @@ button {
   margin: 8px 0 11px;
 }
 
-.recognized-preview {
-  border: 1px solid #e3e9e3;
-  margin: 12px 0;
-}
-
-.recognized-preview-heading {
+.answer-response-heading {
   align-items: center;
-  background: #f2f6f2;
   display: flex;
+  gap: 10px;
   justify-content: space-between;
-  padding: 9px 10px;
 }
 
-.recognized-preview-heading h3 {
+.answer-response-heading h3 {
   color: #20382c;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
   margin: 0;
 }
 
-.recognized-preview-heading p {
+.answer-response-heading p {
   color: #7a8980;
   font-size: 9px;
   margin: 3px 0 0;
 }
 
-.recognized-preview-table {
-  max-height: 195px;
+.answer-entry-list {
+  border: 1px solid #e3e9e3;
+  max-height: 450px;
   overflow: auto;
 }
 
-.recognized-preview-row {
+.answer-entry-row {
   align-items: center;
-  border-top: 1px solid #e8ede8;
+  border-bottom: 1px solid #e8ede8;
   display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(75px, 0.7fr) minmax(100px, 1.4fr) 58px;
-  min-height: 32px;
-  padding: 5px 9px;
+  gap: 9px;
+  grid-template-columns: 74px minmax(0, 1fr) 38px;
+  min-height: 46px;
+  padding: 6px 9px;
 }
 
-.recognized-preview-row > span {
-  color: #53675e;
-  font-size: 9px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
+.answer-entry-row:last-child {
+  border-bottom: 0;
 }
 
-.recognized-preview-head {
-  background: #fbfcfa;
-  position: sticky;
-  top: 0;
-  z-index: 1;
+.answer-entry-label {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.recognized-preview-head > span {
-  color: #77867d;
-  font-size: 8px;
+.answer-entry-label > span {
+  color: #20382c;
+  font-size: 10px;
   font-weight: 700;
 }
 
-.recognized-preview-status {
-  color: #21734f !important;
-  font-weight: 650;
+.answer-entry-label small {
+  color: #7a8980;
+  font-size: 9px;
 }
 
-.recognized-preview-status.needs-review {
-  color: #a45a32 !important;
+.answer-entry-input {
+  min-height: 33px;
+  padding: 6px 9px;
+}
+
+.answer-entry-status {
+  color: #89948d;
+  font-size: 8px;
+  text-align: right;
+}
+
+.answer-entry-row.is-filled .answer-entry-status {
+  color: #21734f;
+}
+
+.answer-import-message {
+  color: #21734f;
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 6px 0;
 }
 
 .answer-grade-button {
@@ -2458,10 +2532,6 @@ button {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .recognized-answers {
-    min-height: 180px;
-  }
-
   .answer-results-row {
     gap: 8px;
     grid-template-columns: minmax(70px, 0.85fr) minmax(70px, 1fr) minmax(80px, 1fr) 68px;
@@ -2469,11 +2539,11 @@ button {
     padding-right: 7px;
   }
 
-  .recognized-preview-row {
+  .answer-entry-row {
     gap: 6px;
-    grid-template-columns: minmax(58px, 0.7fr) minmax(85px, 1.3fr) 54px;
-    padding-left: 7px;
-    padding-right: 7px;
+    grid-template-columns: 62px minmax(0, 1fr) 34px;
+    padding-left: 6px;
+    padding-right: 6px;
   }
 }
 
